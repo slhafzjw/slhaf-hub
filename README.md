@@ -165,6 +165,7 @@ Run with compose:
 ```bash
 # optional: export HOST_API_TOKEN=your-token
 # optional: export HOST_PORT=8080
+# optional: export MAX_RUN_CONCURRENCY=8
 docker compose up -d --build
 ```
 

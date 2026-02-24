@@ -454,6 +454,7 @@ fun openEditor(oldStty: String, file: File): Pair<Boolean, String> {
 fun initialScriptTemplate(name: String): String =
     """
 // @desc: $name
+// @timeout: 10s
 // @param: sample | default=value | desc=example parameter
 
 val args: Array<String> = emptyArray()

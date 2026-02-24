@@ -52,6 +52,16 @@ private fun String.jsonEscaped(): String = buildString(length) {
     }
 }
 
+private fun metadataValidationMessage(errors: List<String>): String =
+    buildString {
+        appendLine("metadata validation failed:")
+        errors.forEach { appendLine("- $it") }
+        appendLine("examples:")
+        appendLine("// @desc: Demo greeting API")
+        appendLine("// @timeout: 10s")
+        appendLine("// @param: name | required=false | default=world | desc=Name to greet")
+    }.trim()
+
 fun metadataJson(scriptName: String, metadata: ScriptMetadata, source: String): String {
     val description = metadata.description?.let { "\"${it.jsonEscaped()}\"" } ?: "null"
     val params = metadata.params.joinToString(",") { param ->
@@ -59,15 +69,14 @@ fun metadataJson(scriptName: String, metadata: ScriptMetadata, source: String): 
         val desc = param.description?.let { "\"${it.jsonEscaped()}\"" } ?: "null"
         """{"name":"${param.name.jsonEscaped()}","required":${param.required},"defaultValue":$defaultValue,"description":$desc}"""
     }
-    return """{"script":"${scriptName.jsonEscaped()}","source":"${source.jsonEscaped()}","description":$description,"params":[$params]}"""
+    return """{"script":"${scriptName.jsonEscaped()}","source":"${source.jsonEscaped()}","description":$description,"timeoutMs":${metadata.timeoutMs},"params":[$params]}"""
 }
 
 fun loadMetadata(script: File): Pair<ScriptMetadata, String> {
     val cached = cachedMetadata(script)
     if (cached != null) return cached to "cache"
-
-    val executed = evalAndCapture(script, ScriptRequestContext(args = emptyList())).metadata
-    return executed to "parsed"
+    val parsed = loadMetadataFromComments(script)
+    return parsed to "comments"
 }
 
 suspend fun handleCreateScript(call: ApplicationCall, scriptsDir: File) {
@@ -82,6 +91,14 @@ suspend fun handleCreateScript(call: ApplicationCall, scriptsDir: File) {
     val content = call.receiveText()
     if (content.isBlank()) {
         return call.respondText("script content is empty", status = HttpStatusCode.BadRequest)
+    }
+    val metadataErrors = validateScriptMetadata(content)
+    if (metadataErrors.isNotEmpty()) {
+        return call.respondText(
+            metadataValidationMessage(metadataErrors),
+            status = HttpStatusCode.BadRequest,
+            contentType = ContentType.Text.Plain
+        )
     }
 
     script.parentFile?.mkdirs()
@@ -139,6 +156,14 @@ suspend fun handleUpdateScript(call: ApplicationCall, scriptsDir: File) {
     if (newContent.isBlank()) {
         return call.respondText("script content is empty", status = HttpStatusCode.BadRequest)
     }
+    val metadataErrors = validateScriptMetadata(newContent)
+    if (metadataErrors.isNotEmpty()) {
+        return call.respondText(
+            metadataValidationMessage(metadataErrors),
+            status = HttpStatusCode.BadRequest,
+            contentType = ContentType.Text.Plain
+        )
+    }
 
     val previousContent = script.readText()
     script.writeText(newContent)
@@ -181,10 +206,16 @@ suspend fun handleRunRequest(call: ApplicationCall, scriptsDir: File, consumeBod
         .toList()
 
     val requestBody = if (consumeBody) call.receiveText() else null
-    val result = evalAndCapture(script, ScriptRequestContext(args = requestArgs, body = requestBody))
+    val metadata = loadMetadataFromComments(script)
+    val result = evalAndCaptureWithTimeout(
+        script,
+        ScriptRequestContext(args = requestArgs, body = requestBody),
+        timeoutMs = metadata.timeoutMs,
+    )
 
     val status = when {
         result.ok -> HttpStatusCode.OK
+        result.timedOut -> HttpStatusCode.RequestTimeout
         result.missingRequiredParams.isNotEmpty() -> HttpStatusCode.BadRequest
         else -> HttpStatusCode.InternalServerError
     }

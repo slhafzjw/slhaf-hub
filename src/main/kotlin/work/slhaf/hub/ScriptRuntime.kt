@@ -9,7 +9,8 @@ data class ScriptParamDefinition(
 
 data class ScriptMetadata(
     val description: String? = null,
-    val params: List<ScriptParamDefinition> = emptyList()
+    val params: List<ScriptParamDefinition> = emptyList(),
+    val timeoutMs: Long = 10_000L,
 )
 
 data class ScriptRequestContext(

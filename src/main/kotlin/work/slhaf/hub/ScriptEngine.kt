@@ -5,6 +5,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.PrintStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.script.experimental.api.*
 import kotlin.script.experimental.dependencies.*
 import kotlin.script.experimental.dependencies.maven.MavenDependenciesResolver
@@ -20,6 +23,11 @@ private val metadataCache = ConcurrentHashMap<String, Pair<String, ScriptMetadat
 
 private val resolver = CompoundDependenciesResolver(FileSystemDependenciesResolver(), MavenDependenciesResolver())
 private val argsDeclarationRegex = Regex("""^\s*val\s+args\s*:\s*Array<String>\s*=\s*emptyArray\(\)\s*$""")
+private const val DEFAULT_SCRIPT_TIMEOUT_MS = 10_000L
+private val metadataParamNameRegex = Regex("[A-Za-z0-9._-]+")
+private val evalExecutor = Executors.newCachedThreadPool { r ->
+    Thread(r, "script-eval-worker").apply { isDaemon = true }
+}
 
 fun explicitClasspathFromEnv(): List<File>? {
     val value = System.getenv("HOST_SCRIPT_CLASSPATH") ?: return null
@@ -108,6 +116,7 @@ private fun injectArgsDeclaration(scriptContent: String, args: List<String>): St
 
 private fun parseMetadataFromComments(scriptContent: String): ScriptMetadata {
     var description: String? = null
+    var timeoutMs = DEFAULT_SCRIPT_TIMEOUT_MS
     val params = mutableListOf<ScriptParamDefinition>()
 
     scriptContent.lines().forEach { raw ->
@@ -117,6 +126,11 @@ private fun parseMetadataFromComments(scriptContent: String): ScriptMetadata {
         val comment = line.removePrefix("//").trim()
         if (comment.startsWith("@desc:", ignoreCase = true)) {
             description = comment.substringAfter(":").trim().takeIf { it.isNotBlank() }
+            return@forEach
+        }
+        if (comment.startsWith("@timeout:", ignoreCase = true)) {
+            val raw = comment.substringAfter(":").trim()
+            parseTimeoutMs(raw)?.let { timeoutMs = it }
             return@forEach
         }
         if (comment.startsWith("@param:", ignoreCase = true)) {
@@ -152,7 +166,79 @@ private fun parseMetadataFromComments(scriptContent: String): ScriptMetadata {
         }
     }
 
-    return ScriptMetadata(description = description, params = params)
+    return ScriptMetadata(description = description, params = params, timeoutMs = timeoutMs)
+}
+
+fun validateScriptMetadata(scriptContent: String): List<String> {
+    val errors = mutableListOf<String>()
+    val seenParams = mutableSetOf<String>()
+
+    scriptContent.lines().forEachIndexed { idx, raw ->
+        val lineNo = idx + 1
+        val line = raw.trim()
+        if (!line.startsWith("//")) return@forEachIndexed
+
+        val comment = line.removePrefix("//").trim()
+        if (comment.startsWith("@timeout:", ignoreCase = true)) {
+            val rawTimeout = comment.substringAfter(":").trim()
+            if (parseTimeoutMs(rawTimeout) == null) {
+                errors += "line $lineNo: invalid @timeout '$rawTimeout'. expected format: '@timeout: 10s' or '500ms' or '1m'."
+            }
+            return@forEachIndexed
+        }
+
+        if (comment.startsWith("@param:", ignoreCase = true)) {
+            val payload = comment.substringAfter(":").trim()
+            if (payload.isBlank()) {
+                errors += "line $lineNo: empty @param. expected format: '@param: name | required=true|false | default=value | desc=text'."
+                return@forEachIndexed
+            }
+
+            val parts = payload.split("|").map { it.trim() }.filter { it.isNotBlank() }
+            if (parts.isEmpty()) {
+                errors += "line $lineNo: invalid @param. expected format: '@param: name | required=true|false | default=value | desc=text'."
+                return@forEachIndexed
+            }
+
+            val name = parts.first()
+            if (!metadataParamNameRegex.matches(name)) {
+                errors += "line $lineNo: invalid param name '$name'. allowed pattern: [A-Za-z0-9._-]+."
+            }
+            if (!seenParams.add(name)) {
+                errors += "line $lineNo: duplicate @param name '$name'. param names must be unique."
+            }
+
+            parts.drop(1).forEach { part ->
+                when {
+                    part.equals("required", ignoreCase = true) -> Unit
+                    part.startsWith("required=", ignoreCase = true) -> {
+                        val v = part.substringAfter("=").trim()
+                        if (!v.equals("true", ignoreCase = true) && !v.equals("false", ignoreCase = true)) {
+                            errors += "line $lineNo: invalid required value '$v'. expected true/false."
+                        }
+                    }
+                    part.startsWith("default=", ignoreCase = true) -> Unit
+                    part.startsWith("desc=", ignoreCase = true) -> Unit
+                    else -> {
+                        errors += "line $lineNo: unsupported @param option '$part'. supported: required=, default=, desc=."
+                    }
+                }
+            }
+        }
+    }
+
+    return errors
+}
+
+private fun parseTimeoutMs(raw: String): Long? {
+    if (raw.isBlank()) return null
+    val v = raw.trim().lowercase()
+    return when {
+        v.endsWith("ms") -> v.removeSuffix("ms").trim().toLongOrNull()
+        v.endsWith("s") -> v.removeSuffix("s").trim().toLongOrNull()?.times(1000)
+        v.endsWith("m") -> v.removeSuffix("m").trim().toLongOrNull()?.times(60_000)
+        else -> v.toLongOrNull()?.times(1000)
+    }?.takeIf { it > 0 }
 }
 
 private fun metadataForFile(scriptFile: File, scriptContent: String): ScriptMetadata {
@@ -175,7 +261,8 @@ data class ScriptExecutionResult(
     val ok: Boolean,
     val output: String,
     val metadata: ScriptMetadata,
-    val missingRequiredParams: List<String>
+    val missingRequiredParams: List<String>,
+    val timedOut: Boolean = false,
 )
 
 fun cachedMetadata(scriptFile: File): ScriptMetadata? {
@@ -187,6 +274,11 @@ fun cachedMetadata(scriptFile: File): ScriptMetadata? {
 
 fun removeCachedMetadata(scriptFile: File) {
     metadataCache.remove(scriptFile.canonicalPath)
+}
+
+fun loadMetadataFromComments(scriptFile: File): ScriptMetadata {
+    val content = scriptFile.readText()
+    return metadataForFile(scriptFile, content)
 }
 
 fun evalAndCapture(scriptFile: File, requestContext: ScriptRequestContext = ScriptRequestContext()): ScriptExecutionResult {
@@ -232,7 +324,8 @@ fun evalAndCapture(scriptFile: File, requestContext: ScriptRequestContext = Scri
                 ok = result is ResultWithDiagnostics.Success && missingRequired.isEmpty(),
                 output = finalText,
                 metadata = metadata,
-                missingRequiredParams = missingRequired
+                missingRequiredParams = missingRequired,
+                timedOut = false,
             )
         } finally {
             ps.flush()
@@ -240,5 +333,29 @@ fun evalAndCapture(scriptFile: File, requestContext: ScriptRequestContext = Scri
             System.setOut(oldOut)
             System.setErr(oldErr)
         }
+    }
+}
+
+fun evalAndCaptureWithTimeout(
+    scriptFile: File,
+    requestContext: ScriptRequestContext = ScriptRequestContext(),
+    timeoutMs: Long,
+): ScriptExecutionResult {
+    val boundedTimeout = timeoutMs.coerceAtLeast(1)
+    val future = evalExecutor.submit<ScriptExecutionResult> {
+        evalAndCapture(scriptFile, requestContext)
+    }
+    return try {
+        future.get(boundedTimeout, TimeUnit.MILLISECONDS)
+    } catch (_: TimeoutException) {
+        future.cancel(true)
+        val metadata = loadMetadataFromComments(scriptFile)
+        ScriptExecutionResult(
+            ok = false,
+            output = "[ERROR] Script execution timed out after ${boundedTimeout}ms",
+            metadata = metadata,
+            missingRequiredParams = emptyList(),
+            timedOut = true,
+        )
     }
 }

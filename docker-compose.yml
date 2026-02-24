@@ -13,6 +13,11 @@ services:
       - "${HOST_PORT:-8080}:8080"
     environment:
       HOST_API_TOKEN: ${HOST_API_TOKEN:-}
+      MAX_RUN_CONCURRENCY: ${MAX_RUN_CONCURRENCY:-}
     volumes:
       - ./scripts:/app/scripts
-    command: ["--host=0.0.0.0", "--port=8080", "--scripts-dir=/app/scripts"]
+    command:
+      - "--host=0.0.0.0"
+      - "--port=8080"
+      - "--scripts-dir=/app/scripts"
+      - "--max-run-concurrency=${MAX_RUN_CONCURRENCY:-}"
