@@ -1,167 +1,43 @@
-# Kotlin Script Host (Gradle Project)
+# slhaf-hub
 
-This project provides two runtime entrypoints while keeping dynamic script loading from `scripts/`.
+Kotlin-based dynamic script host with HTTP APIs, root/sub token auth, script metadata, timeout control, and companion CLI/TUI tools.
 
-## Run CLI host
+Language:
+- English: `README.md`
+- 中文: `README.zh-CN.md`
+
+## Features
+- Dynamic script loading from `scripts/*.hub.kts` without restarting host
+- Root/Sub token authorization model
+- Metadata in script comments (`@desc`, `@timeout`, `@param`)
+- Script CRUD + run + metadata APIs
+- Subtoken management APIs
+- Run concurrency limit (`--max-run-concurrency`)
+- Script timeout (default 10s, script-level override)
+
+## Requirements
+- JDK 17+
+- Gradle (or Gradle wrapper)
+
+## Quick Start
+### Server
+#### 1) Run from terminal (Gradle)
 ```bash
 cd /tmp/kotlin-scripts
-./gradlew runCli --args='scripts/hello.hub.kts'
-./gradlew runCli --args='scripts/hello.hub.kts --arg=name=Codex --arg=upper=true'
-```
-
-Watch mode:
-```bash
-./gradlew runCli --args='scripts/hello.hub.kts --watch --debounce-ms=200'
-```
-
-## Run Web host (Ktor)
-```bash
 ./gradlew runWeb --args='--host=0.0.0.0 --port=8080 --scripts-dir=./scripts'
 ```
 
-Auth:
-- Use `Authorization: Bearer <token>` for all APIs except `/health`.
-- Token source:
-  - Preferred: set env `HOST_API_TOKEN`.
-  - Otherwise host auto-generates a token and stores it at `scripts/.host-api-token`.
-- Token types:
-  - `root`: full access to all endpoints.
-  - `sub`: only `health`, filtered `scripts`, and allowed-script `meta`/`run`.
-
-Routes:
-- `GET /health`
-- `GET /type`
-- `GET /scripts`
-- `GET /scripts/{script}` (raw script content)
-- `POST /scripts/{script}`
-- `PUT /scripts/{script}`
-- `DELETE /scripts/{script}`
-- `GET /meta/{script}`
-- `GET /run/{script}?k=v`
-- `POST /run/{script}?k=v`
-- `GET /subtokens` (root only)
-- `GET /subtokens/{name}` (root only)
-- `POST /subtokens/{name}` (root only, body = script names list)
-- `PUT /subtokens/{name}` (root only, body = script names list)
-- `DELETE /subtokens/{name}` (root only)
-
-Examples:
-```bash
-curl 'http://127.0.0.1:8080/health'
-TOKEN="$(cat scripts/.host-api-token)"
-curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/type'
-curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/scripts'
-curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/scripts/hello'
-curl -H "Authorization: Bearer $TOKEN" -X POST 'http://127.0.0.1:8080/scripts/new-api' --data-binary $'// @desc: new api\nval args: Array<String> = emptyArray()\nprintln("ok")'
-curl -H "Authorization: Bearer $TOKEN" -X PUT 'http://127.0.0.1:8080/scripts/new-api' --data-binary $'// @desc: new api v2\nval args: Array<String> = emptyArray()\nprintln("ok-v2")'
-curl -H "Authorization: Bearer $TOKEN" -X DELETE 'http://127.0.0.1:8080/scripts/new-api'
-curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/meta/hello'
-curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/run/hello?name=Alice&upper=true'
-curl -H "Authorization: Bearer $TOKEN" -X POST 'http://127.0.0.1:8080/run/hello?name=Alice' -d 'from-body'
-curl -H "Authorization: Bearer $TOKEN" -X POST 'http://127.0.0.1:8080/subtokens/demo-sub' --data-binary $'hello\ntime'
-curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/subtokens'
-```
-
-## Script Metadata & Args (`*.hub.kts`)
-Scripts declare metadata in comments and receive request arguments through explicit `args` declaration:
-
-```kotlin
-// @desc: Demo greeting API
-// @param: name | default=world | desc=Name to greet
-// @param: token | required=true | desc=Required token
-
-val args: Array<String> = emptyArray()
-val kv = args.mapNotNull {
-  val i = it.indexOf('=')
-  if (i <= 0) null else it.substring(0, i) to it.substring(i + 1)
-}.toMap()
-
-val name = kv["name"] ?: "world"
-val token = kv["token"] ?: error("token required")
-println("hello $name, token=$token")
-```
-
-## Dynamic scripts
-You can add/remove `*.hub.kts` files in `scripts/` at any time. The web host resolves scripts by route name (`/run/{script}` -> `scripts/{script}.hub.kts`) on each request, so newly added scripts are available immediately.
-
-## Notes
-- This keeps runtime behavior dynamic; Gradle is used for dependency resolution and launching, not for precompiling scripts.
-- IDE completion for regular Kotlin sources (`src/main/kotlin`) is fully modelled by Gradle.
-- You do not need a package/build artifact step before each run. `runCli` and `runWeb` launch directly from source; scripts are compiled on-demand per execution/request.
-- For script files with custom extension (`*.hub.kts`), IDEA code insight is usually weaker than standard `*.main.kts` or module Kotlin sources. This is an IDE limitation for custom script definitions.
-
-## Command CLI
-A standalone CLI script is available at `tools/slhaf-hub-cli.kts` (independent from host internals, only HTTP calls).
-
-Examples:
-```bash
-kotlin tools/slhaf-hub-cli.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token list
-kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token type
-kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token show hello
-kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token run hello --arg=name=Alice --arg=upper=true
-kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token create demo --text='// @desc: demo\nval args: Array<String> = emptyArray()\nprintln("ok")'
-kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token sub-create demo-sub --scripts=hello,time
-kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token sub-list
-```
-
-Note:
-- In this environment, `elide run <kts> -- <args...>` currently does not expose Kotlin script args reliably; use `kotlin` to run the CLI script.
-
-## Simple TUI
-A minimal keyboard-driven TUI is available at `tools/slhaf-hub-tui.kts`.
-
-Run:
-```bash
-kotlin tools/slhaf-hub-tui.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token
-```
-
-Keys:
-- `Up/Down` or `j/k`: switch script
-- `Left/Right` or `h/l`: switch action (grouped by `Script` / `SubToken` / `System`)
-- `Enter`: execute selected action
-- `q`: quit
-
-Action model:
-- `root` token: full grouped actions including `Subtokens`
-- `sub` token: reduced action set (`Refresh/Run/Meta/Type/Quit`)
-- `Subtokens` opens a keyboard sub-menu (`List/Show/Create/Update/Delete/Back`)
-
-Create/Edit/Delete behavior:
-- `Create`: prompt script name, then choose source mode:
-  - `e` (default): create temp file, open terminal editor, then upload via API
-  - `f`: read a specified local file and upload via API
-  - In editor mode, if content is unchanged from initial template, creation is cancelled
-- `Edit`: fetch current script content (`GET /scripts/{script}`), write to temp file, open editor, save+exit, then upload via `PUT`
-- `Delete`: asks confirmation before calling `DELETE`
-- `Run`: prompts for optional query args (`k=v`, separated by `&` or space), and optional POST mode/body
-  - Now uses a keyboard-driven sub-menu (`Method/Query/Body/Execute/Cancel`) and remembers last run config per script during the session
-
-Editor selection:
-- First uses `$EDITOR`
-- Fallback to first available of `nvim`, `vim`, `nano`
-
-## Docker
-Build image:
+#### 2) Run with Docker
 ```bash
 docker build -t slhaf-hub:latest .
-```
-
-Run container (mount local scripts directory):
-```bash
 docker run --rm -p 8080:8080 \
   -v /tmp/kotlin-scripts/scripts:/app/scripts \
   -e HOST_API_TOKEN=your-token \
+  -e MAX_RUN_CONCURRENCY=8 \
   slhaf-hub:latest
 ```
 
-Then call APIs:
-```bash
-curl http://127.0.0.1:8080/health
-curl -H "Authorization: Bearer your-token" http://127.0.0.1:8080/scripts
-```
-
-## Docker Compose
-Run with compose:
+#### 3) Run with Docker Compose
 ```bash
 # optional: export HOST_API_TOKEN=your-token
 # optional: export HOST_PORT=8080
@@ -169,13 +45,126 @@ Run with compose:
 docker compose up -d --build
 ```
 
-Check status/logs:
+Health check:
 ```bash
-docker compose ps
-docker compose logs -f slhaf-hub
+curl http://127.0.0.1:8080/health
 ```
 
-Stop:
+### Clients
+#### CLI
 ```bash
-docker compose down
+kotlin tools/slhaf-hub-cli.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token list
+kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token type
+kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token run hello --arg=name=Alice --arg=upper=true
 ```
+
+#### TUI
+```bash
+kotlin tools/slhaf-hub-tui.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token
+```
+
+CLI/TUI env vars:
+- `SLHAF_HUB_BASE_URL`
+- `SLHAF_HUB_TOKEN`
+- `SLHAF_HUB_TOKEN_FILE`
+
+## Auth Model
+Auth headers:
+- `Authorization: Bearer <token>` (recommended)
+- `X-Host-Token: <token>`
+
+Token source priority:
+1. `HOST_API_TOKEN` env var
+2. `scripts/.host-api-token`
+3. Auto-generated token saved to `scripts/.host-api-token`
+
+Token types:
+- `root`: full access
+- `sub`: access to `/health`, `/type`, filtered `/scripts`, and allowed-script `/meta/{script}` + `/run/{script}`
+
+## Script Metadata (`*.hub.kts`)
+Example:
+```kotlin
+// @desc: Demo greeting API
+// @timeout: 10s
+// @param: name | required=false | default=world | desc=Name to greet
+
+val args: Array<String> = emptyArray()
+val kv = args.mapNotNull {
+    val i = it.indexOf('=')
+    if (i <= 0) null else it.substring(0, i) to it.substring(i + 1)
+}.toMap()
+
+println("hello " + (kv["name"] ?: "world"))
+```
+
+Fields:
+- `@desc: <text>`
+- `@timeout: <value>`
+- `@param: <name> | required=true|false | default=<value> | desc=<text>`
+
+Timeout formats:
+- `500ms`, `10s`, `1m`, or plain integer seconds (`10`)
+
+Default timeout:
+- `10s`
+
+### Metadata Validation
+`POST /scripts/{script}` and `PUT /scripts/{script}` validate metadata before saving.
+
+On validation failure, server returns `400 Bad Request` with:
+- line-based reason details
+- valid metadata examples
+
+## API Summary
+Public:
+- `GET /health`
+
+Authenticated:
+- `GET /type`
+- `GET /scripts`
+- `GET /meta/{script}`
+- `GET /run/{script}?k=v`
+- `POST /run/{script}?k=v`
+
+Root only:
+- `GET /scripts/{script}`
+- `POST /scripts/{script}`
+- `PUT /scripts/{script}`
+- `DELETE /scripts/{script}`
+- `GET /subtokens`
+- `GET /subtokens/{name}`
+- `POST /subtokens/{name}`
+- `PUT /subtokens/{name}`
+- `DELETE /subtokens/{name}`
+
+Common statuses:
+- `200`, `201`, `400`, `401`, `403`, `404`, `408` (timeout)
+
+## Runtime Controls
+Run concurrency:
+- arg: `--max-run-concurrency=<N>`
+- env (compose): `MAX_RUN_CONCURRENCY`
+- default: number of available processors
+
+The limit only applies to `/run/*` endpoints.
+
+## Testing
+Run:
+```bash
+./gradlew test
+```
+
+Current automated coverage focuses on WebHost APIs:
+- auth behavior
+- script CRUD/meta/run
+- metadata validation responses
+- subtoken permission filtering
+- run timeout behavior
+
+## Project Layout
+- `src/main/kotlin/work/slhaf/hub`: host implementation
+- `src/test/kotlin/work/slhaf/hub`: automated tests
+- `scripts`: runtime scripts and token/subtoken storage
+- `tools`: standalone CLI/TUI scripts
+- `Dockerfile`, `docker-compose.yml`: container deployment
