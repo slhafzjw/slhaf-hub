@@ -225,8 +225,29 @@ fun colorizeStatusLine(line: String): String =
 
 fun prettyPrintJsonOrKeep(raw: String): String {
     val text = raw.trim()
-    if (!(text.startsWith("{") || text.startsWith("["))) return raw
+    if (!isLikelyJson(text)) return raw
     return runCatching { prettyJson(text) }.getOrElse { raw }
+}
+
+fun isLikelyJson(text: String): Boolean {
+    if (text.isBlank()) return false
+    val first = text.first()
+    if (first != '{' && first != '[') return false
+
+    val second = text.drop(1).firstOrNull { !it.isWhitespace() } ?: return false
+    return when (first) {
+        '{' -> second == '"' || second == '}'
+        '[' -> second == ']' ||
+            second == '{' ||
+            second == '[' ||
+            second == '"' ||
+            second == '-' ||
+            second.isDigit() ||
+            second == 't' ||
+            second == 'f' ||
+            second == 'n'
+        else -> false
+    }
 }
 
 fun prettyJson(input: String): String {
@@ -455,7 +476,7 @@ fun initialScriptTemplate(name: String): String =
     """
 // @desc: $name
 // @timeout: 10s
-// @param: sample | default=value | desc=example parameter
+// @param: sample | required=false | default=value | desc=example parameter
 
 val args: Array<String> = emptyArray()
 val kv = args.mapNotNull {

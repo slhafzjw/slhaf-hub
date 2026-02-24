@@ -208,10 +208,14 @@ fun validateScriptMetadata(scriptContent: String): List<String> {
                 errors += "line $lineNo: duplicate @param name '$name'. param names must be unique."
             }
 
+            var hasRequiredOption = false
             parts.drop(1).forEach { part ->
                 when {
-                    part.equals("required", ignoreCase = true) -> Unit
+                    part.equals("required", ignoreCase = true) -> {
+                        hasRequiredOption = true
+                    }
                     part.startsWith("required=", ignoreCase = true) -> {
+                        hasRequiredOption = true
                         val v = part.substringAfter("=").trim()
                         if (!v.equals("true", ignoreCase = true) && !v.equals("false", ignoreCase = true)) {
                             errors += "line $lineNo: invalid required value '$v'. expected true/false."
@@ -223,6 +227,9 @@ fun validateScriptMetadata(scriptContent: String): List<String> {
                         errors += "line $lineNo: unsupported @param option '$part'. supported: required=, default=, desc=."
                     }
                 }
+            }
+            if (!hasRequiredOption) {
+                errors += "line $lineNo: missing required option. expected '@param: name | required=true|false | default=value | desc=text'."
             }
         }
     }
@@ -282,6 +289,14 @@ fun loadMetadataFromComments(scriptFile: File): ScriptMetadata {
 }
 
 fun evalAndCapture(scriptFile: File, requestContext: ScriptRequestContext = ScriptRequestContext()): ScriptExecutionResult {
+    return evalAndCapture(scriptFile, requestContext, enforceRequiredParams = true)
+}
+
+fun evalAndCapture(
+    scriptFile: File,
+    requestContext: ScriptRequestContext = ScriptRequestContext(),
+    enforceRequiredParams: Boolean,
+): ScriptExecutionResult {
     synchronized(evalLock) {
         val oldOut = System.out
         val oldErr = System.err
@@ -298,30 +313,40 @@ fun evalAndCapture(scriptFile: File, requestContext: ScriptRequestContext = Scri
                 .filter { p ->
                     p.required && requestContext.args.none { token ->
                         token.substringBefore("=", missingDelimiterValue = "") == p.name
-                    } && p.defaultValue == null
+                    }
                 }
                 .map { it.name }
 
             val injected = injectArgsDeclaration(original, requestContext.args)
             val result = evalSource(injected.toScriptSource(scriptFile.name))
+            val returnValueError = (result as? ResultWithDiagnostics.Success)
+                ?.value
+                ?.returnValue as? ResultValue.Error
+            val hasErrorDiagnostics = result.reports.any {
+                it.severity == ScriptDiagnostic.Severity.ERROR || it.severity == ScriptDiagnostic.Severity.FATAL
+            }
             val diagnostics = result.reports
                 .filter { it.severity > ScriptDiagnostic.Severity.DEBUG }
                 .joinToString("\n") {
                     val ex = it.exception?.let { e -> ": ${e::class.simpleName}: ${e.message}" } ?: ""
                     "[${it.severity}] ${it.message}$ex"
                 }
-            val missingMessage = if (missingRequired.isEmpty()) "" else
+            val missingMessage = if (!enforceRequiredParams || missingRequired.isEmpty()) "" else
                 "[ERROR] Missing required parameters: ${missingRequired.joinToString(", ")}"
 
             val output = buffer.toString(Charsets.UTF_8.name()).trim()
             val finalText = buildString {
                 if (output.isNotEmpty()) appendLine(output)
+                if (returnValueError != null) appendLine("[ERROR] ${returnValueError.error::class.simpleName}: ${returnValueError.error.message}")
                 if (diagnostics.isNotEmpty()) appendLine(diagnostics)
                 if (missingMessage.isNotEmpty()) appendLine(missingMessage)
             }.trim()
 
             ScriptExecutionResult(
-                ok = result is ResultWithDiagnostics.Success && missingRequired.isEmpty(),
+                ok = result is ResultWithDiagnostics.Success &&
+                    !hasErrorDiagnostics &&
+                    returnValueError == null &&
+                    (!enforceRequiredParams || missingRequired.isEmpty()),
                 output = finalText,
                 metadata = metadata,
                 missingRequiredParams = missingRequired,
@@ -340,10 +365,11 @@ fun evalAndCaptureWithTimeout(
     scriptFile: File,
     requestContext: ScriptRequestContext = ScriptRequestContext(),
     timeoutMs: Long,
+    enforceRequiredParams: Boolean = true,
 ): ScriptExecutionResult {
     val boundedTimeout = timeoutMs.coerceAtLeast(1)
     val future = evalExecutor.submit<ScriptExecutionResult> {
-        evalAndCapture(scriptFile, requestContext)
+        evalAndCapture(scriptFile, requestContext, enforceRequiredParams = enforceRequiredParams)
     }
     return try {
         future.get(boundedTimeout, TimeUnit.MILLISECONDS)

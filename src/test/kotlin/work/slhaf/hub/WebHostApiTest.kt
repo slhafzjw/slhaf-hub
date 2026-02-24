@@ -182,6 +182,63 @@ class WebHostApiTest {
         assertTrue(run.bodyAsText().contains("timed out"))
     }
 
+    @Test
+    fun metadataRequiresExplicitRequiredField() = withApp { _ ->
+        val create = client.post("/scripts/badmeta") {
+            bearerRoot()
+            setBody(
+                """
+                // @desc: bad metadata
+                // @param: name | default=world | desc=missing required
+                val args: Array<String> = emptyArray()
+                println("ok")
+                """.trimIndent()
+            )
+        }
+        assertEquals(HttpStatusCode.BadRequest, create.status)
+        val body = create.bodyAsText()
+        assertTrue(body.contains("metadata validation failed"))
+        assertTrue(body.contains("missing required option"))
+    }
+
+    @Test
+    fun runErrorResponseIncludesParamsAndRequiredCheck() = withApp { _ ->
+        val create = client.post("/scripts/runner") {
+            bearerRoot()
+            setBody(
+                """
+                // @desc: run test
+                // @param: must | required=true | default=world | desc=Must be provided explicitly
+                // @param: boom | required=false | default=false | desc=Trigger runtime failure
+                val args: Array<String> = emptyArray()
+                val kv = args.mapNotNull {
+                    val i = it.indexOf('=')
+                    if (i <= 0) null else it.substring(0, i) to it.substring(i + 1)
+                }.toMap()
+                if ((kv["boom"] ?: "false").equals("true", ignoreCase = true)) {
+                    error("boom")
+                }
+                println("must=" + (kv["must"] ?: "none"))
+                """.trimIndent()
+            )
+        }
+        assertEquals(HttpStatusCode.Created, create.status)
+
+        val missingRequired = client.get("/run/runner") { bearerRoot() }
+        assertEquals(HttpStatusCode.BadRequest, missingRequired.status)
+        val missingBody = missingRequired.bodyAsText()
+        assertTrue(missingBody.contains("missing required params: must"))
+        assertTrue(missingBody.contains("params:"))
+        assertTrue(missingBody.contains("must (required=true"))
+
+        val runtimeError = client.get("/run/runner?must=ok&boom=true") { bearerRoot() }
+        assertEquals(HttpStatusCode.InternalServerError, runtimeError.status)
+        val runtimeErrorBody = runtimeError.bodyAsText()
+        assertTrue(runtimeErrorBody.contains("script execution failed"))
+        assertTrue(runtimeErrorBody.contains("params:"))
+        assertTrue(runtimeErrorBody.contains("boom (required=false"))
+    }
+
     private fun withApp(testBlock: suspend io.ktor.server.testing.ApplicationTestBuilder.(java.nio.file.Path) -> Unit) {
         val scriptsDir = createTempDirectory("webhost-api-test-")
         tempDirs.add(scriptsDir)

@@ -62,6 +62,34 @@ private fun metadataValidationMessage(errors: List<String>): String =
         appendLine("// @param: name | required=false | default=world | desc=Name to greet")
     }.trim()
 
+private fun formatParamsHint(metadata: ScriptMetadata): String =
+    buildString {
+        appendLine("params:")
+        if (metadata.params.isEmpty()) {
+            appendLine("- (none)")
+            return@buildString
+        }
+        metadata.params.forEach { p ->
+            val defaultPart = p.defaultValue?.let { ", default=$it" } ?: ""
+            val descPart = p.description?.let { ", desc=$it" } ?: ""
+            appendLine("- ${p.name} (required=${p.required}$defaultPart$descPart)")
+        }
+    }.trimEnd()
+
+private fun runFailureMessage(result: ScriptExecutionResult): String {
+    val title = when {
+        result.timedOut -> "[ERROR] script execution timed out"
+        result.missingRequiredParams.isNotEmpty() ->
+            "[ERROR] script execution failed: missing required params: ${result.missingRequiredParams.joinToString(", ")}"
+        else -> "[ERROR] script execution failed"
+    }
+    return buildString {
+        appendLine(title)
+        if (result.output.isNotBlank()) appendLine(result.output)
+        append(formatParamsHint(result.metadata))
+    }.trim()
+}
+
 fun metadataJson(scriptName: String, metadata: ScriptMetadata, source: String): String {
     val description = metadata.description?.let { "\"${it.jsonEscaped()}\"" } ?: "null"
     val params = metadata.params.joinToString(",") { param ->
@@ -105,7 +133,7 @@ suspend fun handleCreateScript(call: ApplicationCall, scriptsDir: File) {
     script.writeText(content)
     removeCachedMetadata(script)
 
-    val result = evalAndCapture(script, ScriptRequestContext())
+    val result = evalAndCapture(script, ScriptRequestContext(), enforceRequiredParams = false)
     if (!result.ok) {
         script.delete()
         removeCachedMetadata(script)
@@ -169,7 +197,7 @@ suspend fun handleUpdateScript(call: ApplicationCall, scriptsDir: File) {
     script.writeText(newContent)
     removeCachedMetadata(script)
 
-    val result = evalAndCapture(script, ScriptRequestContext())
+    val result = evalAndCapture(script, ScriptRequestContext(), enforceRequiredParams = false)
     if (!result.ok) {
         script.writeText(previousContent)
         removeCachedMetadata(script)
@@ -221,7 +249,11 @@ suspend fun handleRunRequest(call: ApplicationCall, scriptsDir: File, consumeBod
     }
 
     call.respondText(
-        result.output.ifBlank { if (result.ok) "OK" else "FAILED" },
+        if (result.ok) {
+            result.output.ifBlank { "OK" }
+        } else {
+            runFailureMessage(result)
+        },
         status = status,
         contentType = ContentType.Text.Plain
     )
