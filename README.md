@@ -24,9 +24,13 @@ Auth:
 - Token source:
   - Preferred: set env `HOST_API_TOKEN`.
   - Otherwise host auto-generates a token and stores it at `scripts/.host-api-token`.
+- Token types:
+  - `root`: full access to all endpoints.
+  - `sub`: only `health`, filtered `scripts`, and allowed-script `meta`/`run`.
 
 Routes:
 - `GET /health`
+- `GET /type`
 - `GET /scripts`
 - `GET /scripts/{script}` (raw script content)
 - `POST /scripts/{script}`
@@ -35,11 +39,17 @@ Routes:
 - `GET /meta/{script}`
 - `GET /run/{script}?k=v`
 - `POST /run/{script}?k=v`
+- `GET /subtokens` (root only)
+- `GET /subtokens/{name}` (root only)
+- `POST /subtokens/{name}` (root only, body = script names list)
+- `PUT /subtokens/{name}` (root only, body = script names list)
+- `DELETE /subtokens/{name}` (root only)
 
 Examples:
 ```bash
 curl 'http://127.0.0.1:8080/health'
 TOKEN="$(cat scripts/.host-api-token)"
+curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/type'
 curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/scripts'
 curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/scripts/hello'
 curl -H "Authorization: Bearer $TOKEN" -X POST 'http://127.0.0.1:8080/scripts/new-api' --data-binary $'// @desc: new api\nval args: Array<String> = emptyArray()\nprintln("ok")'
@@ -48,6 +58,8 @@ curl -H "Authorization: Bearer $TOKEN" -X DELETE 'http://127.0.0.1:8080/scripts/
 curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/meta/hello'
 curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/run/hello?name=Alice&upper=true'
 curl -H "Authorization: Bearer $TOKEN" -X POST 'http://127.0.0.1:8080/run/hello?name=Alice' -d 'from-body'
+curl -H "Authorization: Bearer $TOKEN" -X POST 'http://127.0.0.1:8080/subtokens/demo-sub' --data-binary $'hello\ntime'
+curl -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:8080/subtokens'
 ```
 
 ## Script Metadata & Args (`*.hub.kts`)
@@ -84,9 +96,12 @@ A standalone CLI script is available at `tools/api-cli.main.kts` (independent fr
 Examples:
 ```bash
 kotlin tools/api-cli.main.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token list
+kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token type
 kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token show hello
 kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token run hello --arg=name=Alice --arg=upper=true
 kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token create demo --text='// @desc: demo\nval args: Array<String> = emptyArray()\nprintln("ok")'
+kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token sub-create demo-sub --scripts=hello,time
+kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token sub-list
 ```
 
 Note:
@@ -102,9 +117,14 @@ kotlin tools/api-tui.main.kts --base-url=http://127.0.0.1:8080 --token-file=./sc
 
 Keys:
 - `Up/Down` or `j/k`: switch script
-- `Left/Right` or `h/l`: switch action (`Refresh/Show/Run/Meta/Create/Edit/Delete/Quit`)
+- `Left/Right` or `h/l`: switch action (grouped by `Script` / `SubToken` / `System`)
 - `Enter`: execute selected action
 - `q`: quit
+
+Action model:
+- `root` token: full grouped actions including `Subtokens`
+- `sub` token: reduced action set (`Refresh/Run/Meta/Type/Quit`)
+- `Subtokens` opens a keyboard sub-menu (`List/Show/Create/Update/Delete/Back`)
 
 Create/Edit/Delete behavior:
 - `Create`: prompt script name, then choose source mode:

@@ -13,7 +13,18 @@ import kotlin.system.exitProcess
 data class Options(
     val baseUrl: String,
     val token: String?,
-    val tokenFile: String?
+    val tokenFile: String?,
+)
+
+data class TokenInfo(
+    val tokenType: String,
+    val subTokenName: String?,
+)
+
+data class RunProfile(
+    val method: String = "GET",
+    val queryRaw: String = "",
+    val body: String = "",
 )
 
 private val RESET = "\u001b[0m"
@@ -26,22 +37,40 @@ private val RED = "\u001b[31m"
 private val BG_BLUE = "\u001b[44m"
 private val FG_BLACK = "\u001b[30m"
 
-fun ok(text: String) = "$GREEN$text$RESET"
-fun warn(text: String) = "$YELLOW$text$RESET"
-fun err(text: String) = "$RED$text$RESET"
-fun accent(text: String) = "$CYAN$text$RESET"
-fun selected(text: String) = "$BG_BLUE$FG_BLACK$BOLD$text$RESET"
+private fun ok(text: String) = "$GREEN$text$RESET"
+private fun warn(text: String) = "$YELLOW$text$RESET"
+private fun err(text: String) = "$RED$text$RESET"
+private fun accent(text: String) = "$CYAN$text$RESET"
+private fun selected(text: String) = "$BG_BLUE$FG_BLACK$BOLD$text$RESET"
 
-fun usage(): String = """
+enum class Key {
+    UP, DOWN, LEFT, RIGHT, ENTER, Q, OTHER,
+}
+
+enum class FocusRow {
+    TARGET,
+    ACTION,
+    LIST,
+    SYSTEM,
+}
+
+fun usage(): String =
+    """
 Usage:
   kotlin tools/api-tui.main.kts [--base-url=http://127.0.0.1:8080] [--token=<token> | --token-file=./scripts/.host-api-token]
 
+Layout:
+  Actions:
+    Target: [Scripts] [Subtokens]
+    Action: [Create] [Edit] [Delete] [Refresh] ... (depends on target)
+    System: [Type] [Quit]
+
 Keys:
-  Up/Down or j/k   Select script
-  Left/Right or h/l Select action
-  Enter            Execute action
-  q                Quit
-""".trimIndent()
+  Up/Down or j/k     Focus row (Target/Action/List/System)
+  Left/Right or h/l  Select item in focused row
+  Enter              Execute selected Action/System
+  q                  Quit
+    """.trimIndent()
 
 fun parseOptions(args: List<String>): Options {
     if (args.contains("--help") || args.contains("-h")) {
@@ -81,22 +110,43 @@ fun request(
     token: String,
     method: String,
     path: String,
-    body: String? = null
+    body: String? = null,
 ): Pair<Int, String> {
-    val reqBuilder = HttpRequest.newBuilder(URI.create("$baseUrl$path"))
-        .header("Accept", "text/plain,application/json")
-        .header("Authorization", "Bearer $token")
-    val request = when (method) {
-        "GET" -> reqBuilder.GET().build()
-        "POST" -> reqBuilder.header("Content-Type", "text/plain; charset=utf-8")
-            .POST(HttpRequest.BodyPublishers.ofString(body ?: "")).build()
-        "PUT" -> reqBuilder.header("Content-Type", "text/plain; charset=utf-8")
-            .PUT(HttpRequest.BodyPublishers.ofString(body ?: "")).build()
-        "DELETE" -> reqBuilder.DELETE().build()
-        else -> error("Unsupported method: $method")
-    }
+    val reqBuilder =
+        HttpRequest
+            .newBuilder(URI.create("$baseUrl$path"))
+            .header("Accept", "text/plain,application/json")
+            .header("Authorization", "Bearer $token")
+
+    val request =
+        when (method) {
+            "GET" -> reqBuilder.GET().build()
+            "POST" -> reqBuilder.header("Content-Type", "text/plain; charset=utf-8")
+                .POST(HttpRequest.BodyPublishers.ofString(body ?: "")).build()
+            "PUT" -> reqBuilder.header("Content-Type", "text/plain; charset=utf-8")
+                .PUT(HttpRequest.BodyPublishers.ofString(body ?: "")).build()
+            "DELETE" -> reqBuilder.DELETE().build()
+            else -> error("Unsupported method: $method")
+        }
+
     val response = client.send(request, HttpResponse.BodyHandlers.ofString())
     return response.statusCode() to response.body()
+}
+
+fun parseTokenInfo(raw: String): TokenInfo {
+    val type = Regex("\"tokenType\"\\s*:\\s*\"([^\"]+)\"").find(raw)?.groupValues?.get(1) ?: "unknown"
+    val subName = Regex("\"subTokenName\"\\s*:\\s*(null|\"([^\"]*)\")").find(raw)?.groupValues?.let {
+        if (it[1] == "null") null else it[2]
+    }
+    return TokenInfo(type.lowercase(), subName)
+}
+
+fun fetchTokenInfo(client: HttpClient, baseUrl: String, token: String): Pair<TokenInfo, String> {
+    val (status, body) = request(client, baseUrl, token, "GET", "/type")
+    if (status >= 400) error("failed to fetch /type, HTTP $status: $body")
+    val info = parseTokenInfo(body)
+    val label = if (info.tokenType == "sub") "sub:${info.subTokenName ?: "-"}" else info.tokenType
+    return info to "Token type: $label"
 }
 
 fun shell(cmd: String): String {
@@ -108,16 +158,6 @@ fun shell(cmd: String): String {
 
 fun commandExists(cmd: String): Boolean =
     ProcessBuilder("bash", "-lc", "command -v $cmd >/dev/null 2>&1").start().waitFor() == 0
-
-enum class Key {
-    UP, DOWN, LEFT, RIGHT, ENTER, Q, OTHER
-}
-
-data class RunProfile(
-    val method: String = "GET",
-    val queryRaw: String = "",
-    val body: String = ""
-)
 
 fun readKey(): Key {
     val first = System.`in`.read()
@@ -150,70 +190,61 @@ fun clearScreen() {
     print("\u001b[2J\u001b[H")
 }
 
-fun drawRunConfig(scriptName: String, profile: RunProfile, selected: Int, hint: String) {
-    clearScreen()
-    println("${accent("Run Config")}  ${DIM}script=$scriptName$RESET")
-    println("${DIM}Up/Down select | Left/Right toggle | Enter edit/execute | q cancel$RESET")
-    println()
-
-    val rows = listOf(
-        "Method: ${profile.method}",
-        "Query: ${profile.queryRaw.ifBlank { "(empty)" }}",
-        "Body: ${if (profile.method == "POST") profile.body.ifBlank { "(empty)" } else "(ignored for GET)"}",
-        "Execute",
-        "Cancel"
-    )
-    rows.forEachIndexed { idx, row ->
-        if (idx == selected) println(" ${selected("> $row")}") else println("   $row")
-    }
-    println()
-    println("${BOLD}Hint:$RESET ${colorizeStatusLine(hint)}")
-}
-
-fun colorizeStatusLine(line: String): String {
-    return when {
+fun colorizeStatusLine(line: String): String =
+    when {
         line.startsWith("[ERROR]") || line.startsWith("[HTTP 4") || line.startsWith("[HTTP 5") -> err(line)
-        line.startsWith("Loaded") || line.contains("HTTP 200") || line.startsWith("[RUN") || line.startsWith("[SHOW") || line.startsWith("[META") || line.startsWith("[CREATE") || line.startsWith("[EDIT") || line.startsWith("[DELETE") -> ok(line)
+        line.startsWith("Loaded") || line.contains("HTTP 200") || line.startsWith("[RUN") || line.startsWith("[SHOW") || line.startsWith("[META") || line.startsWith("[CREATE") || line.startsWith("[EDIT") || line.startsWith("[DELETE") || line.startsWith("[SUB") || line.startsWith("Token type:") -> ok(line)
         line.startsWith("No scripts.") || line.startsWith("[HTTP 3") || line.startsWith("[CANCEL]") -> warn(line)
         else -> line
     }
+
+fun drawRow(label: String, items: List<String>, selectedIdx: Int, focused: Boolean) {
+    print("  ${if (focused) selected("$label") else "$DIM$label$RESET"}: ")
+    items.forEachIndexed { idx, name ->
+        if (idx == selectedIdx) print(selected(" $name ")) else print("[${accent(name)}] ")
+    }
+    println()
 }
 
 fun draw(
     baseUrl: String,
-    scripts: List<String>,
-    selectedScript: Int,
-    actions: List<String>,
-    selectedAction: Int,
-    output: String
+    targetOptions: List<String>,
+    targetIdx: Int,
+    actionOptions: List<String>,
+    actionIdx: Int,
+    systemOptions: List<String>,
+    systemIdx: Int,
+    listTitle: String,
+    listItems: List<String>,
+    listIdx: Int,
+    focus: FocusRow,
+    output: String,
 ) {
     clearScreen()
     println("${accent("API TUI")}  ${DIM}base=$baseUrl$RESET")
-    println("${DIM}Keys: Up/Down/j/k script | Left/Right/h/l action | Enter execute | q quit$RESET")
+    println("${DIM}Keys: Up/Down focus row | Left/Right select | Enter execute | q quit$RESET")
     println()
 
-    print("${BOLD}Actions:$RESET ")
-    actions.forEachIndexed { idx, name ->
-        if (idx == selectedAction) print(selected(" $name ")) else print("[${accent(name)}] ")
-    }
+    println("${BOLD}Actions:$RESET")
+    drawRow("Target", targetOptions, targetIdx, focus == FocusRow.TARGET)
+    drawRow("Action", actionOptions, actionIdx, focus == FocusRow.ACTION)
+    drawRow("System", systemOptions, systemIdx, focus == FocusRow.SYSTEM)
+
     println()
-    println()
-    println("${BOLD}Scripts:$RESET")
-    if (scripts.isEmpty()) {
-        println("  ${DIM}(no scripts)$RESET")
+    println("${BOLD}$listTitle:$RESET ${if (focus == FocusRow.LIST) selected(" selected ") else ""}")
+    if (listItems.isEmpty()) {
+        println("  ${DIM}(no items)$RESET")
     } else {
-        scripts.forEachIndexed { idx, name ->
-            if (idx == selectedScript) {
-                println(" ${selected("> $name")}")
-            } else {
-                println("   $name")
-            }
+        print("  ")
+        listItems.forEachIndexed { idx, name ->
+            if (idx == listIdx) print(selected(" $name ")) else print("[${accent(name)}] ")
         }
+        println()
     }
+
     println()
     println("${BOLD}Output:$RESET")
-    val lines = output.lines()
-    lines.takeLast(max(1, 16)).forEach { println(colorizeStatusLine(it)) }
+    output.lines().takeLast(max(1, 18)).forEach { println(colorizeStatusLine(it)) }
 }
 
 fun fetchScripts(client: HttpClient, baseUrl: String, token: String): Pair<List<String>, String> {
@@ -227,11 +258,21 @@ fun fetchScripts(client: HttpClient, baseUrl: String, token: String): Pair<List<
     }
 }
 
+fun fetchSubtokens(client: HttpClient, baseUrl: String, token: String): Pair<List<String>, String> {
+    return try {
+        val (status, body) = request(client, baseUrl, token, "GET", "/subtokens")
+        if (status >= 400) return emptyList<String>() to "[HTTP $status]\n$body"
+        val names = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").findAll(body).map { it.groupValues[1] }.toList()
+        names to "Loaded ${names.size} subtoken(s)."
+    } catch (t: Throwable) {
+        emptyList<String>() to "[ERROR] ${t::class.simpleName}: ${t.message}"
+    }
+}
+
 fun chooseEditor(): String? {
     val env = System.getenv("EDITOR")?.trim()
     if (!env.isNullOrBlank()) return env
-    val fallback = listOf("nvim", "vim", "nano").firstOrNull { commandExists(it) }
-    return fallback
+    return listOf("nvim", "vim", "nano").firstOrNull { commandExists(it) }
 }
 
 fun promptLine(oldStty: String, prompt: String): String {
@@ -259,7 +300,7 @@ fun openEditor(oldStty: String, file: File): Pair<Boolean, String> {
     shell("stty $oldStty < /dev/tty")
     print("\u001b[?25h")
     println("Opening editor: $editor ${file.absolutePath}")
-    val cmd = """$editor "${file.absolutePath.replace("\"", "\\\"")}""""
+    val cmd = "$editor \"${file.absolutePath.replace("\"", "\\\"")}\""
     val process = ProcessBuilder("bash", "-lc", cmd).inheritIO().start()
     val code = process.waitFor()
     shell("stty -echo -icanon min 1 time 0 < /dev/tty")
@@ -267,7 +308,8 @@ fun openEditor(oldStty: String, file: File): Pair<Boolean, String> {
     return if (code == 0) true to "[OK] Editor closed." else false to "[ERROR] Editor exited with code $code"
 }
 
-fun initialScriptTemplate(name: String): String = """
+fun initialScriptTemplate(name: String): String =
+    """
 // @desc: $name
 // @param: sample | default=value | desc=example parameter
 
@@ -279,7 +321,7 @@ val kv = args.mapNotNull {
 
 println("script=$name")
 println("sample=" + (kv["sample"] ?: "value"))
-""".trimIndent()
+    """.trimIndent()
 
 fun buildQueryString(raw: String): String {
     val items = raw.split(Regex("[&\\s]+")).map { it.trim() }.filter { it.isNotBlank() }
@@ -292,12 +334,7 @@ fun buildQueryString(raw: String): String {
     return pairs.joinToString("&", prefix = "?") { (k, v) -> "${encode(k)}=${encode(v)}" }
 }
 
-fun runCreateFlow(
-    client: HttpClient,
-    baseUrl: String,
-    token: String,
-    oldStty: String
-): String {
+fun runCreateFlow(client: HttpClient, baseUrl: String, token: String, oldStty: String): String {
     val scriptName = promptLine(oldStty, "Create script name: ")
     if (scriptName.isBlank()) return "[CANCEL] Empty script name."
     val sourceMode = promptLine(oldStty, "Source mode [e=editor,f=file] (default e): ").lowercase().ifBlank { "e" }
@@ -325,19 +362,13 @@ fun runCreateFlow(
             text
         }
     }
-    if (content.isBlank()) return "[CANCEL] Empty script content."
 
+    if (content.isBlank()) return "[CANCEL] Empty script content."
     val (status, body) = request(client, baseUrl, token, "POST", "/scripts/${encode(scriptName)}", content)
     return "[CREATE $scriptName] HTTP $status\n$body"
 }
 
-fun runEditFlow(
-    client: HttpClient,
-    baseUrl: String,
-    token: String,
-    scriptName: String,
-    oldStty: String
-): String {
+fun runEditFlow(client: HttpClient, baseUrl: String, token: String, scriptName: String, oldStty: String): String {
     val (statusGet, bodyGet) = request(client, baseUrl, token, "GET", "/scripts/${encode(scriptName)}")
     if (statusGet >= 400) return "[EDIT $scriptName] HTTP $statusGet\n$bodyGet"
 
@@ -356,17 +387,78 @@ fun runEditFlow(
     return "[EDIT $scriptName] HTTP $statusPut\n$bodyPut"
 }
 
-fun runDeleteFlow(
-    client: HttpClient,
-    baseUrl: String,
-    token: String,
-    scriptName: String,
-    oldStty: String
-): String {
+fun runDeleteFlow(client: HttpClient, baseUrl: String, token: String, scriptName: String, oldStty: String): String {
     val confirm = promptLine(oldStty, "Delete '$scriptName'? [y/N]: ").lowercase()
     if (confirm != "y" && confirm != "yes") return "[CANCEL] Delete aborted."
     val (status, body) = request(client, baseUrl, token, "DELETE", "/scripts/${encode(scriptName)}")
     return "[DELETE $scriptName] HTTP $status\n$body"
+}
+
+fun normalizeScriptsInput(raw: String): String {
+    val scripts = raw.split(Regex("[,\\s]+")).map { it.trim() }.filter { it.isNotBlank() }
+    if (scripts.any { !Regex("[A-Za-z0-9._-]+$").matches(it) }) {
+        error("Invalid script names, only [A-Za-z0-9._-] allowed")
+    }
+    return scripts.joinToString("\n")
+}
+
+fun runSubTokenListFlow(client: HttpClient, baseUrl: String, token: String): String {
+    val (status, body) = request(client, baseUrl, token, "GET", "/subtokens")
+    return "[SUB-LIST] HTTP $status\n$body"
+}
+
+fun runSubTokenShowFlow(client: HttpClient, baseUrl: String, token: String, selectedName: String?, oldStty: String): String {
+    val name = selectedName ?: promptLine(oldStty, "Subtoken name: ")
+    if (name.isBlank()) return "[CANCEL] Empty subtoken name."
+    val (status, body) = request(client, baseUrl, token, "GET", "/subtokens/${encode(name)}")
+    return "[SUB-SHOW $name] HTTP $status\n$body"
+}
+
+fun runSubTokenCreateFlow(client: HttpClient, baseUrl: String, token: String, oldStty: String): String {
+    val name = promptLine(oldStty, "Subtoken name: ")
+    if (name.isBlank()) return "[CANCEL] Empty subtoken name."
+    val scriptsRaw = promptLine(oldStty, "Allowed scripts (comma/space separated): ")
+    val body = normalizeScriptsInput(scriptsRaw)
+    val (status, content) = request(client, baseUrl, token, "POST", "/subtokens/${encode(name)}", body)
+    return "[SUB-CREATE $name] HTTP $status\n$content"
+}
+
+fun runSubTokenUpdateFlow(client: HttpClient, baseUrl: String, token: String, selectedName: String?, oldStty: String): String {
+    val name = selectedName ?: promptLine(oldStty, "Subtoken name to update: ")
+    if (name.isBlank()) return "[CANCEL] Empty subtoken name."
+    val scriptsRaw = promptLine(oldStty, "Allowed scripts (comma/space separated): ")
+    val body = normalizeScriptsInput(scriptsRaw)
+    val (status, content) = request(client, baseUrl, token, "PUT", "/subtokens/${encode(name)}", body)
+    return "[SUB-UPDATE $name] HTTP $status\n$content"
+}
+
+fun runSubTokenDeleteFlow(client: HttpClient, baseUrl: String, token: String, selectedName: String?, oldStty: String): String {
+    val name = selectedName ?: promptLine(oldStty, "Subtoken name to delete: ")
+    if (name.isBlank()) return "[CANCEL] Empty subtoken name."
+    val confirm = promptLine(oldStty, "Delete subtoken '$name'? [y/N]: ").lowercase()
+    if (confirm != "y" && confirm != "yes") return "[CANCEL] Delete aborted."
+    val (status, body) = request(client, baseUrl, token, "DELETE", "/subtokens/${encode(name)}")
+    return "[SUB-DELETE $name] HTTP $status\n$body"
+}
+
+fun drawRunConfig(scriptName: String, profile: RunProfile, selected: Int, hint: String) {
+    clearScreen()
+    println("${accent("Run Config")}  ${DIM}script=$scriptName$RESET")
+    println("${DIM}Up/Down select | Left/Right toggle | Enter edit/execute | q cancel$RESET")
+    println()
+
+    val rows = listOf(
+        "Method: ${profile.method}",
+        "Query: ${profile.queryRaw.ifBlank { "(empty)" }}",
+        "Body: ${if (profile.method == "POST") profile.body.ifBlank { "(empty)" } else "(ignored for GET)"}",
+        "Execute",
+        "Cancel",
+    )
+    rows.forEachIndexed { idx, row ->
+        if (idx == selected) println(" ${selected("> $row")}") else println("   $row")
+    }
+    println()
+    println("${BOLD}Hint:$RESET ${colorizeStatusLine(hint)}")
 }
 
 fun runScriptFlow(
@@ -375,7 +467,7 @@ fun runScriptFlow(
     token: String,
     scriptName: String,
     oldStty: String,
-    initialProfile: RunProfile
+    initialProfile: RunProfile,
 ): Pair<String, RunProfile?> {
     var profile = initialProfile
     var selected = 0
@@ -386,11 +478,9 @@ fun runScriptFlow(
         when (readKey()) {
             Key.UP -> selected = if (selected == 0) 4 else selected - 1
             Key.DOWN -> selected = if (selected == 4) 0 else selected + 1
-            Key.LEFT, Key.RIGHT -> {
-                if (selected == 0) {
-                    profile = profile.copy(method = if (profile.method == "GET") "POST" else "GET")
-                    hint = "Method set to ${profile.method}"
-                }
+            Key.LEFT, Key.RIGHT -> if (selected == 0) {
+                profile = profile.copy(method = if (profile.method == "GET") "POST" else "GET")
+                hint = "Method set to ${profile.method}"
             }
             Key.Q -> return "[CANCEL] Run aborted." to null
             Key.ENTER -> {
@@ -427,100 +517,226 @@ fun runScriptFlow(
     }
 }
 
+fun targetOptions(tokenInfo: TokenInfo): List<String> =
+    if (tokenInfo.tokenType == "sub") listOf("Scripts") else listOf("Scripts", "Subtokens")
+
+fun actionOptions(tokenInfo: TokenInfo, target: String): List<String> =
+    when (target) {
+        "Subtokens" -> listOf("Refresh", "List", "Show", "Create", "Update", "Delete")
+        else -> {
+            if (tokenInfo.tokenType == "sub") {
+                listOf("Refresh", "Run", "Meta")
+            } else {
+                listOf("Refresh", "Show", "Run", "Meta", "Create", "Edit", "Delete")
+            }
+        }
+    }
+
 fun main(args: Array<String>) {
     val options = parseOptions(args.toList())
     val token = readToken(options)
     val client = HttpClient.newHttpClient()
-    val actions = listOf("Refresh", "Show", "Run", "Meta", "Create", "Edit", "Delete", "Quit")
+    val (tokenInfo, tokenInfoText) =
+        runCatching { fetchTokenInfo(client, options.baseUrl, token) }
+            .getOrElse { t ->
+                val reason = t.message?.ifBlank { null } ?: t::class.simpleName ?: "unknown"
+                System.err.println("[WARN] Backend unavailable at ${options.baseUrl}, TUI exited. reason=$reason")
+                return
+            }
+
+    var scripts = emptyList<String>()
+    var subtokens = emptyList<String>()
+    var output = tokenInfoText
+
+    var focus = FocusRow.ACTION
+    var targetIdx = 0
+    var actionIdx = 0
+    var systemIdx = 0
+    var listIdx = 0
+
     val runProfiles = mutableMapOf<String, RunProfile>()
-    var selectedAction = 0
-    var selectedScript = 0
-    var output = ""
+    val systemOptions = listOf("Type", "Quit")
 
     val oldStty = shell("stty -g < /dev/tty")
     shell("stty -echo -icanon min 1 time 0 < /dev/tty")
     print("\u001b[?25l")
 
     try {
-        var (scripts, initMessage) = fetchScripts(client, options.baseUrl, token)
-        output = initMessage
-        if (selectedScript >= scripts.size) selectedScript = max(0, scripts.size - 1)
+        val initScripts = fetchScripts(client, options.baseUrl, token)
+        scripts = initScripts.first
+        output += "\n" + initScripts.second
+        if (tokenInfo.tokenType == "root") {
+            val initSubs = fetchSubtokens(client, options.baseUrl, token)
+            subtokens = initSubs.first
+            output += "\n" + initSubs.second
+        }
 
         while (true) {
-            draw(options.baseUrl, scripts, selectedScript, actions, selectedAction, output)
+            val targets = targetOptions(tokenInfo)
+            if (targetIdx > targets.lastIndex) targetIdx = 0
+            val currentTarget = targets[targetIdx]
+            val actions = actionOptions(tokenInfo, currentTarget)
+            if (actionIdx > actions.lastIndex) actionIdx = 0
+
+            val listTitle = currentTarget
+            val listItems = if (currentTarget == "Subtokens") subtokens else scripts
+            if (listIdx > listItems.lastIndex) listIdx = max(0, listItems.lastIndex)
+
+            draw(
+                baseUrl = options.baseUrl,
+                targetOptions = targets,
+                targetIdx = targetIdx,
+                actionOptions = actions,
+                actionIdx = actionIdx,
+                systemOptions = systemOptions,
+                systemIdx = systemIdx,
+                listTitle = listTitle,
+                listItems = listItems,
+                listIdx = listIdx,
+                focus = focus,
+                output = output,
+            )
+
             when (readKey()) {
-                Key.UP -> if (scripts.isNotEmpty()) selectedScript = max(0, selectedScript - 1)
-                Key.DOWN -> if (scripts.isNotEmpty()) selectedScript = minOf(scripts.lastIndex, selectedScript + 1)
-                Key.LEFT -> selectedAction = if (selectedAction == 0) actions.lastIndex else selectedAction - 1
-                Key.RIGHT -> selectedAction = if (selectedAction == actions.lastIndex) 0 else selectedAction + 1
+                Key.UP -> {
+                    focus = when (focus) {
+                        FocusRow.TARGET -> FocusRow.LIST
+                        FocusRow.ACTION -> FocusRow.TARGET
+                        FocusRow.SYSTEM -> FocusRow.ACTION
+                        FocusRow.LIST -> FocusRow.SYSTEM
+                    }
+                }
+                Key.DOWN -> {
+                    focus = when (focus) {
+                        FocusRow.TARGET -> FocusRow.ACTION
+                        FocusRow.ACTION -> FocusRow.SYSTEM
+                        FocusRow.SYSTEM -> FocusRow.LIST
+                        FocusRow.LIST -> FocusRow.TARGET
+                    }
+                }
+                Key.LEFT -> {
+                    when (focus) {
+                        FocusRow.TARGET -> {
+                            targetIdx = if (targetIdx == 0) targets.lastIndex else targetIdx - 1
+                            actionIdx = 0
+                            listIdx = 0
+                        }
+                        FocusRow.ACTION -> actionIdx = if (actionIdx == 0) actions.lastIndex else actionIdx - 1
+                        FocusRow.LIST -> if (listItems.isNotEmpty()) listIdx = if (listIdx == 0) listItems.lastIndex else listIdx - 1
+                        FocusRow.SYSTEM -> systemIdx = if (systemIdx == 0) systemOptions.lastIndex else systemIdx - 1
+                    }
+                }
+                Key.RIGHT -> {
+                    when (focus) {
+                        FocusRow.TARGET -> {
+                            targetIdx = if (targetIdx == targets.lastIndex) 0 else targetIdx + 1
+                            actionIdx = 0
+                            listIdx = 0
+                        }
+                        FocusRow.ACTION -> actionIdx = if (actionIdx == actions.lastIndex) 0 else actionIdx + 1
+                        FocusRow.LIST -> if (listItems.isNotEmpty()) listIdx = if (listIdx == listItems.lastIndex) 0 else listIdx + 1
+                        FocusRow.SYSTEM -> systemIdx = if (systemIdx == systemOptions.lastIndex) 0 else systemIdx + 1
+                    }
+                }
                 Key.Q -> break
                 Key.ENTER -> {
-                    when (actions[selectedAction]) {
-                        "Refresh" -> {
-                            val result = fetchScripts(client, options.baseUrl, token)
-                            scripts = result.first
-                            if (selectedScript >= scripts.size) selectedScript = max(0, scripts.size - 1)
-                            output = result.second
+                    if (focus == FocusRow.SYSTEM) {
+                        when (systemOptions[systemIdx]) {
+                            "Type" -> {
+                                output = runCatching {
+                                    val (info, text) = fetchTokenInfo(client, options.baseUrl, token)
+                                    val suffix = if (info.tokenType == "sub") "\nsubToken=${info.subTokenName ?: "-"}" else ""
+                                    "$text$suffix"
+                                }.getOrElse { "[ERROR] ${it::class.simpleName}: ${it.message}" }
+                            }
+                            "Quit" -> break
                         }
-                        "Show" -> {
-                            output = if (scripts.isEmpty()) {
-                                "No scripts."
-                            } else runCatching {
-                                val script = scripts[selectedScript]
-                                val (status, body) = request(client, options.baseUrl, token, "GET", "/scripts/${encode(script)}")
-                                "[SHOW $script] HTTP $status\n$body"
-                            }.getOrElse { "[ERROR] ${it::class.simpleName}: ${it.message}" }
-                        }
-                        "Run" -> {
-                            output = if (scripts.isEmpty()) {
-                                "No scripts."
-                            } else runCatching {
-                                val script = scripts[selectedScript]
-                                val initial = runProfiles[script] ?: RunProfile()
-                                val (text, updated) = runScriptFlow(client, options.baseUrl, token, script, oldStty, initial)
-                                if (updated != null) runProfiles[script] = updated
-                                text
-                            }.getOrElse { "[ERROR] ${it::class.simpleName}: ${it.message}" }
-                        }
-                        "Meta" -> {
-                            output = if (scripts.isEmpty()) {
-                                "No scripts."
-                            } else runCatching {
-                                val script = scripts[selectedScript]
-                                val (status, body) = request(client, options.baseUrl, token, "GET", "/meta/${encode(script)}")
-                                "[META $script] HTTP $status\n$body"
-                            }.getOrElse { "[ERROR] ${it::class.simpleName}: ${it.message}" }
-                        }
-                        "Create" -> {
-                            output = runCatching { runCreateFlow(client, options.baseUrl, token, oldStty) }
-                                .getOrElse { "[ERROR] ${it::class.simpleName}: ${it.message}" }
-                            val refreshed = fetchScripts(client, options.baseUrl, token)
-                            scripts = refreshed.first
-                            if (selectedScript >= scripts.size) selectedScript = max(0, scripts.size - 1)
-                        }
-                        "Edit" -> {
-                            output = if (scripts.isEmpty()) {
-                                "No scripts."
-                            } else runCatching {
-                                val script = scripts[selectedScript]
-                                runEditFlow(client, options.baseUrl, token, script, oldStty)
-                            }.getOrElse { "[ERROR] ${it::class.simpleName}: ${it.message}" }
-                            val refreshed = fetchScripts(client, options.baseUrl, token)
-                            scripts = refreshed.first
-                            if (selectedScript >= scripts.size) selectedScript = max(0, scripts.size - 1)
-                        }
-                        "Delete" -> {
-                            output = if (scripts.isEmpty()) {
-                                "No scripts."
-                            } else runCatching {
-                                val script = scripts[selectedScript]
-                                runDeleteFlow(client, options.baseUrl, token, script, oldStty)
-                            }.getOrElse { "[ERROR] ${it::class.simpleName}: ${it.message}" }
-                            val refreshed = fetchScripts(client, options.baseUrl, token)
-                            scripts = refreshed.first
-                            if (selectedScript >= scripts.size) selectedScript = max(0, scripts.size - 1)
-                        }
-                        "Quit" -> break
+                    } else {
+                        val selectedItem = listItems.getOrNull(listIdx)
+                        output = runCatching {
+                            when (currentTarget) {
+                                "Subtokens" -> {
+                                    when (actions[actionIdx]) {
+                                        "Refresh", "List" -> {
+                                            val res = fetchSubtokens(client, options.baseUrl, token)
+                                            subtokens = res.first
+                                            listIdx = if (subtokens.isEmpty()) 0 else minOf(listIdx, subtokens.lastIndex)
+                                            "[SUB-LIST]\n${res.second}"
+                                        }
+                                        "Show" -> runSubTokenShowFlow(client, options.baseUrl, token, selectedItem, oldStty)
+                                        "Create" -> {
+                                            val text = runSubTokenCreateFlow(client, options.baseUrl, token, oldStty)
+                                            val res = fetchSubtokens(client, options.baseUrl, token)
+                                            subtokens = res.first
+                                            text + "\n" + res.second
+                                        }
+                                        "Update" -> {
+                                            val text = runSubTokenUpdateFlow(client, options.baseUrl, token, selectedItem, oldStty)
+                                            val res = fetchSubtokens(client, options.baseUrl, token)
+                                            subtokens = res.first
+                                            text + "\n" + res.second
+                                        }
+                                        "Delete" -> {
+                                            val text = runSubTokenDeleteFlow(client, options.baseUrl, token, selectedItem, oldStty)
+                                            val res = fetchSubtokens(client, options.baseUrl, token)
+                                            subtokens = res.first
+                                            listIdx = if (subtokens.isEmpty()) 0 else minOf(listIdx, subtokens.lastIndex)
+                                            text + "\n" + res.second
+                                        }
+                                        else -> "[ERROR] Unsupported subtoken action"
+                                    }
+                                }
+                                else -> {
+                                    when (actions[actionIdx]) {
+                                        "Refresh" -> {
+                                            val res = fetchScripts(client, options.baseUrl, token)
+                                            scripts = res.first
+                                            listIdx = if (scripts.isEmpty()) 0 else minOf(listIdx, scripts.lastIndex)
+                                            res.second
+                                        }
+                                        "Show" -> {
+                                            val script = selectedItem ?: return@runCatching "No scripts."
+                                            val (status, body) = request(client, options.baseUrl, token, "GET", "/scripts/${encode(script)}")
+                                            "[SHOW $script] HTTP $status\n$body"
+                                        }
+                                        "Run" -> {
+                                            val script = selectedItem ?: return@runCatching "No scripts."
+                                            val initial = runProfiles[script] ?: RunProfile()
+                                            val (text, updated) = runScriptFlow(client, options.baseUrl, token, script, oldStty, initial)
+                                            if (updated != null) runProfiles[script] = updated
+                                            text
+                                        }
+                                        "Meta" -> {
+                                            val script = selectedItem ?: return@runCatching "No scripts."
+                                            val (status, body) = request(client, options.baseUrl, token, "GET", "/meta/${encode(script)}")
+                                            "[META $script] HTTP $status\n$body"
+                                        }
+                                        "Create" -> {
+                                            val text = runCreateFlow(client, options.baseUrl, token, oldStty)
+                                            val res = fetchScripts(client, options.baseUrl, token)
+                                            scripts = res.first
+                                            text + "\n" + res.second
+                                        }
+                                        "Edit" -> {
+                                            val script = selectedItem ?: return@runCatching "No scripts."
+                                            val text = runEditFlow(client, options.baseUrl, token, script, oldStty)
+                                            val res = fetchScripts(client, options.baseUrl, token)
+                                            scripts = res.first
+                                            text + "\n" + res.second
+                                        }
+                                        "Delete" -> {
+                                            val script = selectedItem ?: return@runCatching "No scripts."
+                                            val text = runDeleteFlow(client, options.baseUrl, token, script, oldStty)
+                                            val res = fetchScripts(client, options.baseUrl, token)
+                                            scripts = res.first
+                                            listIdx = if (scripts.isEmpty()) 0 else minOf(listIdx, scripts.lastIndex)
+                                            text + "\n" + res.second
+                                        }
+                                        else -> "[ERROR] Unsupported script action"
+                                    }
+                                }
+                            }
+                        }.getOrElse { "[ERROR] ${it::class.simpleName}: ${it.message}" }
                     }
                 }
                 else -> {}

@@ -33,6 +33,7 @@ Global options:
 
 Commands:
   health
+  type
   list
   show <script>
   meta <script>
@@ -41,11 +42,16 @@ Commands:
   update <script> (--file=<path> | --text=<content>)
   delete <script>
 
+  sub-list
+  sub-show <name>
+  sub-create <name> --scripts=a,b,c
+  sub-update <name> --scripts=a,b,c
+  sub-delete <name>
+
 Examples:
-  elide run api-cli.main.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token list
-  elide run api-cli.main.kts --token-file=./scripts/.host-api-token show hello
-  elide run api-cli.main.kts --token-file=./scripts/.host-api-token run hello --arg=name=Alice --arg=upper=true
-  elide run api-cli.main.kts --token-file=./scripts/.host-api-token create demo --file=./demo.hub.kts
+  elide run api-cli.main.kts --token-file=./scripts/.host-api-token type
+  elide run api-cli.main.kts --token-file=./scripts/.host-api-token sub-list
+  elide run api-cli.main.kts --token-file=./scripts/.host-api-token sub-create demo --scripts=hello,time
     """.trimIndent()
 
 fun parseInput(args: List<String>): ParsedInput {
@@ -92,6 +98,11 @@ fun requireScriptName(args: List<String>): String {
     return args.first()
 }
 
+fun requireNameArg(args: List<String>, label: String): String {
+    if (args.isEmpty()) error("Missing <$label> argument.")
+    return args.first()
+}
+
 fun parseBodyAndSource(args: List<String>): Pair<String?, String?> {
     val fileArg = args.firstOrNull { it.startsWith("--file=") }?.substringAfter("=")
     val textArg = args.firstOrNull { it.startsWith("--text=") }?.substringAfter("=")
@@ -131,6 +142,20 @@ fun parseRunArgs(args: List<String>): Triple<String, List<Pair<String, String>>,
     return Triple(script, query, post to body)
 }
 
+fun parseScriptsArg(args: List<String>): Set<String> {
+    val raw = args.firstOrNull { it.startsWith("--scripts=") }?.substringAfter("=")
+        ?: error("Missing --scripts=a,b,c")
+    val items =
+        raw.split(',')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toSet()
+    if (items.any { !Regex("[A-Za-z0-9._-]+$").matches(it) }) {
+        error("Invalid script names in --scripts, only [A-Za-z0-9._-] allowed")
+    }
+    return items
+}
+
 fun request(
     client: HttpClient,
     baseUrl: String,
@@ -147,31 +172,13 @@ fun request(
 
     val request =
         when (method) {
-            "GET" -> {
-                reqBuilder.GET().build()
-            }
-
-            "DELETE" -> {
-                reqBuilder.DELETE().build()
-            }
-
-            "POST" -> {
-                reqBuilder
-                    .header("Content-Type", "text/plain; charset=utf-8")
-                    .POST(HttpRequest.BodyPublishers.ofString(body ?: ""))
-                    .build()
-            }
-
-            "PUT" -> {
-                reqBuilder
-                    .header("Content-Type", "text/plain; charset=utf-8")
-                    .PUT(HttpRequest.BodyPublishers.ofString(body ?: ""))
-                    .build()
-            }
-
-            else -> {
-                error("Unsupported method: $method")
-            }
+            "GET" -> reqBuilder.GET().build()
+            "DELETE" -> reqBuilder.DELETE().build()
+            "POST" -> reqBuilder.header("Content-Type", "text/plain; charset=utf-8")
+                .POST(HttpRequest.BodyPublishers.ofString(body ?: "")).build()
+            "PUT" -> reqBuilder.header("Content-Type", "text/plain; charset=utf-8")
+                .PUT(HttpRequest.BodyPublishers.ofString(body ?: "")).build()
+            else -> error("Unsupported method: $method")
         }
 
     val response = client.send(request, HttpResponse.BodyHandlers.ofString())
@@ -187,14 +194,9 @@ fun main(args: Array<String>) {
 
         val (status, body) =
             when (input.command) {
-                "health" -> {
-                    request(client, base, null, "GET", "/health")
-                }
-
-                "list" -> {
-                    request(client, base, token, "GET", "/scripts")
-                }
-
+                "health" -> request(client, base, null, "GET", "/health")
+                "type" -> request(client, base, token, "GET", "/type")
+                "list" -> request(client, base, token, "GET", "/scripts")
                 "show" -> {
                     val script = requireScriptName(input.commandArgs)
                     request(client, base, token, "GET", "/scripts/${encode(script)}")
@@ -208,13 +210,7 @@ fun main(args: Array<String>) {
                 "run" -> {
                     val (script, queryPairs, postAndBody) = parseRunArgs(input.commandArgs)
                     val query =
-                        if (queryPairs.isEmpty()) {
-                            ""
-                        } else {
-                            queryPairs.joinToString("&", prefix = "?") { (k, v) ->
-                                "${encode(k)}=${encode(v)}"
-                            }
-                        }
+                        if (queryPairs.isEmpty()) "" else queryPairs.joinToString("&", prefix = "?") { (k, v) -> "${encode(k)}=${encode(v)}" }
                     val (post, postBody) = postAndBody
                     val method = if (post) "POST" else "GET"
                     request(client, base, token, method, "/run/${encode(script)}$query", postBody)
@@ -239,9 +235,30 @@ fun main(args: Array<String>) {
                     request(client, base, token, "DELETE", "/scripts/${encode(script)}")
                 }
 
-                else -> {
-                    error("Unknown command: ${input.command}\n${usage()}")
+                "sub-list" -> request(client, base, token, "GET", "/subtokens")
+                "sub-show" -> {
+                    val name = requireNameArg(input.commandArgs, "name")
+                    request(client, base, token, "GET", "/subtokens/${encode(name)}")
                 }
+
+                "sub-create" -> {
+                    val name = requireNameArg(input.commandArgs, "name")
+                    val scripts = parseScriptsArg(input.commandArgs.drop(1))
+                    request(client, base, token, "POST", "/subtokens/${encode(name)}", scripts.joinToString("\n"))
+                }
+
+                "sub-update" -> {
+                    val name = requireNameArg(input.commandArgs, "name")
+                    val scripts = parseScriptsArg(input.commandArgs.drop(1))
+                    request(client, base, token, "PUT", "/subtokens/${encode(name)}", scripts.joinToString("\n"))
+                }
+
+                "sub-delete" -> {
+                    val name = requireNameArg(input.commandArgs, "name")
+                    request(client, base, token, "DELETE", "/subtokens/${encode(name)}")
+                }
+
+                else -> error("Unknown command: ${input.command}\n${usage()}")
             }
 
         println(body)

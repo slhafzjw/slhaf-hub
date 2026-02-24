@@ -29,8 +29,11 @@ private fun listScriptNames(scriptsDir: File): List<String> =
         ?.toList()
         ?: emptyList()
 
-fun renderScriptList(scriptsDir: File): String =
-    listScriptNames(scriptsDir).joinToString("\n") { name ->
+fun renderScriptList(scriptsDir: File, allowNames: Set<String>? = null): String =
+    listScriptNames(scriptsDir)
+        .asSequence()
+        .filter { allowNames == null || allowNames.contains(it) }
+        .joinToString("\n") { name ->
         val file = resolveScriptFile(scriptsDir, name)
         val description = file?.let(::cachedMetadata)?.description
         if (description.isNullOrBlank()) name else "$name\t$description"

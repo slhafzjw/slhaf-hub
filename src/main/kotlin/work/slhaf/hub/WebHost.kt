@@ -6,6 +6,7 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.call
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -18,35 +19,122 @@ private const val DEFAULT_PORT = 8080
 private const val DEFAULT_SCRIPTS_DIR = "scripts"
 private const val DEFAULT_HOST = "0.0.0.0"
 
-private fun Application.module(scriptsDir: File, apiToken: String) {
+private suspend fun handleSubTokenCreate(call: io.ktor.server.application.ApplicationCall, security: HostSecurity) {
+    val name = call.parameters["name"]
+        ?: return call.respondText("missing subtoken name", status = HttpStatusCode.BadRequest)
+
+    if (!name.matches(Regex("[A-Za-z0-9._-]+"))) {
+        return call.respondText("invalid subtoken name", status = HttpStatusCode.BadRequest)
+    }
+
+    val scriptsRaw = call.receiveText()
+    val scripts =
+        try {
+            parseScriptNameSet(scriptsRaw)
+        } catch (t: Throwable) {
+            return call.respondText(t.message ?: "invalid script names", status = HttpStatusCode.BadRequest)
+        }
+
+    val created =
+        try {
+            security.subTokens.create(name, scripts)
+        } catch (t: Throwable) {
+            return call.respondText(t.message ?: "failed to create subtoken", status = HttpStatusCode.Conflict)
+        }
+
+    call.respondText(subTokenItemJson(created, includeToken = true), contentType = ContentType.Application.Json, status = HttpStatusCode.Created)
+}
+
+private suspend fun handleSubTokenUpdate(call: io.ktor.server.application.ApplicationCall, security: HostSecurity) {
+    val name = call.parameters["name"]
+        ?: return call.respondText("missing subtoken name", status = HttpStatusCode.BadRequest)
+
+    val scriptsRaw = call.receiveText()
+    val scripts =
+        try {
+            parseScriptNameSet(scriptsRaw)
+        } catch (t: Throwable) {
+            return call.respondText(t.message ?: "invalid script names", status = HttpStatusCode.BadRequest)
+        }
+
+    val updated =
+        try {
+            security.subTokens.update(name, scripts)
+        } catch (t: Throwable) {
+            return call.respondText(t.message ?: "failed to update subtoken", status = HttpStatusCode.NotFound)
+        }
+
+    call.respondText(subTokenItemJson(updated, includeToken = true), contentType = ContentType.Application.Json)
+}
+
+private suspend fun handleSubTokenGet(call: io.ktor.server.application.ApplicationCall, security: HostSecurity) {
+    val name = call.parameters["name"]
+        ?: return call.respondText("missing subtoken name", status = HttpStatusCode.BadRequest)
+
+    val item = security.subTokens.get(name)
+        ?: return call.respondText("subtoken not found: $name", status = HttpStatusCode.NotFound)
+
+    call.respondText(subTokenItemJson(item, includeToken = true), contentType = ContentType.Application.Json)
+}
+
+private suspend fun handleSubTokenDelete(call: io.ktor.server.application.ApplicationCall, security: HostSecurity) {
+    val name = call.parameters["name"]
+        ?: return call.respondText("missing subtoken name", status = HttpStatusCode.BadRequest)
+
+    val deleted = security.subTokens.delete(name)
+    if (!deleted) return call.respondText("subtoken not found: $name", status = HttpStatusCode.NotFound)
+
+    call.respondText("deleted subtoken: $name")
+}
+
+private fun Application.module(scriptsDir: File, security: HostSecurity) {
     routing {
         get("/health") {
             call.respondText("OK")
         }
-        get("/scripts") {
-            if (!requireAuth(call, apiToken)) return@get
-            call.respondText(renderScriptList(scriptsDir), ContentType.Text.Plain)
+
+        get("/type") {
+            val auth = requireAuth(call, security) ?: return@get
+            call.respondText(tokenTypeJson(auth), contentType = ContentType.Application.Json)
         }
+
+        get("/scripts") {
+            val auth = requireAuth(call, security) ?: return@get
+            val allow = visibleScriptsFor(auth)
+            call.respondText(renderScriptList(scriptsDir, allow), ContentType.Text.Plain)
+        }
+
         get("/scripts/{script}") {
-            if (!requireAuth(call, apiToken)) return@get
+            val auth = requireAuth(call, security) ?: return@get
+            if (!requireRoot(call, auth)) return@get
             handleGetScriptContent(call, scriptsDir)
         }
+
         post("/scripts/{script}") {
-            if (!requireAuth(call, apiToken)) return@post
+            val auth = requireAuth(call, security) ?: return@post
+            if (!requireRoot(call, auth)) return@post
             handleCreateScript(call, scriptsDir)
         }
+
         put("/scripts/{script}") {
-            if (!requireAuth(call, apiToken)) return@put
+            val auth = requireAuth(call, security) ?: return@put
+            if (!requireRoot(call, auth)) return@put
             handleUpdateScript(call, scriptsDir)
         }
+
         delete("/scripts/{script}") {
-            if (!requireAuth(call, apiToken)) return@delete
+            val auth = requireAuth(call, security) ?: return@delete
+            if (!requireRoot(call, auth)) return@delete
             handleDeleteScript(call, scriptsDir)
         }
+
         get("/meta/{script}") {
-            if (!requireAuth(call, apiToken)) return@get
+            val auth = requireAuth(call, security) ?: return@get
             val name = call.parameters["script"]
                 ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
+
+            if (!requireScriptAccess(call, auth, name)) return@get
+
             val script = resolveScriptFile(scriptsDir, name)
                 ?: return@get call.respondText("invalid script name", status = HttpStatusCode.BadRequest)
             if (!script.exists()) {
@@ -56,16 +144,54 @@ private fun Application.module(scriptsDir: File, apiToken: String) {
             val (metadata, source) = loadMetadata(script)
             call.respondText(
                 metadataJson(name, metadata, source),
-                contentType = ContentType.Application.Json
+                contentType = ContentType.Application.Json,
             )
         }
+
         get("/run/{script}") {
-            if (!requireAuth(call, apiToken)) return@get
+            val auth = requireAuth(call, security) ?: return@get
+            val name = call.parameters["script"]
+                ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
+            if (!requireScriptAccess(call, auth, name)) return@get
             handleRunRequest(call, scriptsDir, consumeBody = false)
         }
+
         post("/run/{script}") {
-            if (!requireAuth(call, apiToken)) return@post
+            val auth = requireAuth(call, security) ?: return@post
+            val name = call.parameters["script"]
+                ?: return@post call.respondText("missing route name", status = HttpStatusCode.BadRequest)
+            if (!requireScriptAccess(call, auth, name)) return@post
             handleRunRequest(call, scriptsDir, consumeBody = true)
+        }
+
+        get("/subtokens") {
+            val auth = requireAuth(call, security) ?: return@get
+            if (!requireRoot(call, auth)) return@get
+            call.respondText(subTokenListJson(security.subTokens.list()), contentType = ContentType.Application.Json)
+        }
+
+        get("/subtokens/{name}") {
+            val auth = requireAuth(call, security) ?: return@get
+            if (!requireRoot(call, auth)) return@get
+            handleSubTokenGet(call, security)
+        }
+
+        post("/subtokens/{name}") {
+            val auth = requireAuth(call, security) ?: return@post
+            if (!requireRoot(call, auth)) return@post
+            handleSubTokenCreate(call, security)
+        }
+
+        put("/subtokens/{name}") {
+            val auth = requireAuth(call, security) ?: return@put
+            if (!requireRoot(call, auth)) return@put
+            handleSubTokenUpdate(call, security)
+        }
+
+        delete("/subtokens/{name}") {
+            val auth = requireAuth(call, security) ?: return@delete
+            if (!requireRoot(call, auth)) return@delete
+            handleSubTokenDelete(call, security)
         }
     }
 }
@@ -77,18 +203,24 @@ Usage:
   ./gradlew runWeb --args='[--host=0.0.0.0] [--port=8080] [--scripts-dir=./scripts]'
 Routes:
   GET  /health
+  GET  /type
   Authorization:
     Authorization: Bearer <token>
     or X-Host-Token: <token>
   GET  /scripts
-  GET  /scripts/{script}
-  POST /scripts/{script}
-  PUT  /scripts/{script}
-  DELETE /scripts/{script}
-  GET  /meta/{script}
-  GET  /run/{script}?k=v
-  POST /run/{script}?k=v
-        """.trimIndent()
+  GET  /scripts/{script}                      (root only)
+  POST /scripts/{script}                      (root only)
+  PUT  /scripts/{script}                      (root only)
+  DELETE /scripts/{script}                    (root only)
+  GET  /meta/{script}                         (root or allowed subtoken)
+  GET  /run/{script}?k=v                      (root or allowed subtoken)
+  POST /run/{script}?k=v                      (root or allowed subtoken)
+  GET  /subtokens                             (root only)
+  GET  /subtokens/{name}                      (root only)
+  POST /subtokens/{name}                      (root only, body: script names list)
+  PUT  /subtokens/{name}                      (root only, body: script names list)
+  DELETE /subtokens/{name}                    (root only)
+        """.trimIndent(),
     )
 }
 
@@ -109,6 +241,7 @@ fun main(args: Array<String>) {
 
     if (!scriptsDir.exists()) scriptsDir.mkdirs()
     val auth = loadOrCreateApiToken(scriptsDir)
+    val security = createHostSecurity(scriptsDir, auth.token)
 
     println("Starting script web host on http://$host:$port")
     println("Scripts directory: ${scriptsDir.absolutePath}")
@@ -117,10 +250,11 @@ fun main(args: Array<String>) {
         auth.source.startsWith("env:") -> println("Auth token loaded from environment variable.")
         auth.source.startsWith("generated:") ->
             println("Auth token generated and saved to: ${auth.tokenFile?.absolutePath}")
+
         else -> println("Auth token loaded from file: ${auth.tokenFile?.absolutePath}")
     }
 
     embeddedServer(Netty, port = port, host = host) {
-        module(scriptsDir, auth.token)
+        module(scriptsDir, security)
     }.start(wait = true)
 }
