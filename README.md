@@ -139,3 +139,22 @@ Then call APIs:
 curl http://127.0.0.1:8080/health
 curl -H "Authorization: Bearer your-token" http://127.0.0.1:8080/scripts
 ```
+
+## Docker Compose
+Run with compose:
+```bash
+# optional: export HOST_API_TOKEN=your-token
+# optional: export HOST_PORT=8080
+docker compose up -d --build
+```
+
+Check status/logs:
+```bash
+docker compose ps
+docker compose logs -f slhaf-hub
+```
+
+Stop:
+```bash
+docker compose down
+```
