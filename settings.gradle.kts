@@ -1,1 +1,1 @@
-rootProject.name = "kotlin-scripts-host"
+rootProject.name = "slhaf-hub"
