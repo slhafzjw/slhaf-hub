@@ -3,8 +3,8 @@
 Kotlin-based dynamic script host with HTTP APIs, root/sub token auth, script metadata, timeout control, and companion CLI/TUI tools.
 
 Language:
-- English: `README.md`
-- 中文: `README.zh-CN.md`
+- English: [README.md](README.md)
+- 中文: [README.zh-CN.md](README.zh-CN.md)
 
 ## Features
 - Dynamic script loading from `scripts/*.hub.kts` without restarting host

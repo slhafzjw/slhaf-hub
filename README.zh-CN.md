@@ -3,8 +3,8 @@
 基于 Kotlin 的动态脚本宿主，提供 HTTP API、root/sub token 鉴权、脚本 metadata、超时控制，以及配套 CLI/TUI 工具。
 
 语言版本：
-- English: `README.md`
-- 中文: `README.zh-CN.md`
+- English: [README.md](README.md)
+- 中文: [README.zh-CN.md](README.zh-CN.md)
 
 ## 功能概览
 - 从 `scripts/*.hub.kts` 动态加载脚本，无需重启 host
