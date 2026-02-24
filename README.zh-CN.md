@@ -20,10 +20,15 @@
 - Gradle（或 Gradle Wrapper）
 
 ## 快速启动
+克隆项目:
+```bash
+git clone https://github.com/slhafzjw/slhaf-hub.git
+cd slhaf-hub
+```
+
 ### 服务端
 #### 1) 终端启动（Gradle）
 ```bash
-cd /tmp/kotlin-scripts
 ./gradlew runWeb --args='--host=0.0.0.0 --port=8080 --scripts-dir=./scripts'
 ```
 
@@ -31,7 +36,7 @@ cd /tmp/kotlin-scripts
 ```bash
 docker build -t slhaf-hub:latest .
 docker run --rm -p 8080:8080 \
-  -v /tmp/kotlin-scripts/scripts:/app/scripts \
+  -v "$(pwd)/scripts:/app/scripts" \
   -e HOST_API_TOKEN=your-token \
   -e MAX_RUN_CONCURRENCY=8 \
   slhaf-hub:latest

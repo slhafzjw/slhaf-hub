@@ -20,10 +20,15 @@ Language:
 - Gradle (or Gradle wrapper)
 
 ## Quick Start
+Clone project:
+```bash
+git clone https://github.com/slhafzjw/slhaf-hub.git
+cd slhaf-hub
+```
+
 ### Server
 #### 1) Run from terminal (Gradle)
 ```bash
-cd /tmp/kotlin-scripts
 ./gradlew runWeb --args='--host=0.0.0.0 --port=8080 --scripts-dir=./scripts'
 ```
 
@@ -31,7 +36,7 @@ cd /tmp/kotlin-scripts
 ```bash
 docker build -t slhaf-hub:latest .
 docker run --rm -p 8080:8080 \
-  -v /tmp/kotlin-scripts/scripts:/app/scripts \
+  -v "$(pwd)/scripts:/app/scripts" \
   -e HOST_API_TOKEN=your-token \
   -e MAX_RUN_CONCURRENCY=8 \
   slhaf-hub:latest
