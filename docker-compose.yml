@@ -1,0 +1,18 @@
+services:
+  slhaf-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_IMAGE: ${BUILD_IMAGE:-gradle:9.0.0-jdk17}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-eclipse-temurin:17-jre}
+    image: slhaf-hub:latest
+    container_name: slhaf-hub
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      HOST_API_TOKEN: ${HOST_API_TOKEN:-}
+    volumes:
+      - ./scripts:/app/scripts
+    command: ["--port=8080", "--scripts-dir=/app/scripts"]
