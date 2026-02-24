@@ -27,7 +27,7 @@ data class ParsedInput(
 fun usage(): String =
     """
 Usage:
-  elide run api-cli.main.kts [global options] <command> [command options]
+  kotlin slhaf-hub-cli.kts [global options] <command> [command options]
 
 Global options:
   --base-url=<url>               Default: HOST_API_BASE_URL or http://127.0.0.1:8080
@@ -52,9 +52,9 @@ Commands:
   sub-delete <name>
 
 Examples:
-  elide run api-cli.main.kts --token-file=./scripts/.host-api-token type
-  elide run api-cli.main.kts --token-file=./scripts/.host-api-token sub-list
-  elide run api-cli.main.kts --token-file=./scripts/.host-api-token sub-create demo --scripts=hello,time
+  kotlin slhaf-hub-cli.kts --token-file=./scripts/.host-api-token type
+  kotlin slhaf-hub-cli.kts --token-file=./scripts/.host-api-token sub-list
+  kotlin slhaf-hub-cli.kts --token-file=./scripts/.host-api-token sub-create demo --scripts=hello,time
     """.trimIndent()
 
 fun parseInput(args: List<String>): ParsedInput {

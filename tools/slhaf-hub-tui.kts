@@ -66,7 +66,7 @@ private fun selected(text: String) = "$BG_BLUE$FG_BLACK$BOLD$text$RESET"
 fun usage(): String =
     """
 Usage:
-  kotlin tools/api-tui.main.kts [--base-url=http://127.0.0.1:8080] [--token=<token> | --token-file=./scripts/.host-api-token]
+  kotlin tools/slhaf-hub-tui.kts [--base-url=http://127.0.0.1:8080] [--token=<token> | --token-file=./scripts/.host-api-token]
 
 Layout:
   Actions:

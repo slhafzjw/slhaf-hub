@@ -91,28 +91,28 @@ You can add/remove `*.hub.kts` files in `scripts/` at any time. The web host res
 - For script files with custom extension (`*.hub.kts`), IDEA code insight is usually weaker than standard `*.main.kts` or module Kotlin sources. This is an IDE limitation for custom script definitions.
 
 ## Command CLI
-A standalone CLI script is available at `tools/api-cli.main.kts` (independent from host internals, only HTTP calls).
+A standalone CLI script is available at `tools/slhaf-hub-cli.kts` (independent from host internals, only HTTP calls).
 
 Examples:
 ```bash
-kotlin tools/api-cli.main.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token list
-kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token type
-kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token show hello
-kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token run hello --arg=name=Alice --arg=upper=true
-kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token create demo --text='// @desc: demo\nval args: Array<String> = emptyArray()\nprintln("ok")'
-kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token sub-create demo-sub --scripts=hello,time
-kotlin tools/api-cli.main.kts --token-file=./scripts/.host-api-token sub-list
+kotlin tools/slhaf-hub-cli.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token list
+kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token type
+kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token show hello
+kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token run hello --arg=name=Alice --arg=upper=true
+kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token create demo --text='// @desc: demo\nval args: Array<String> = emptyArray()\nprintln("ok")'
+kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token sub-create demo-sub --scripts=hello,time
+kotlin tools/slhaf-hub-cli.kts --token-file=./scripts/.host-api-token sub-list
 ```
 
 Note:
 - In this environment, `elide run <kts> -- <args...>` currently does not expose Kotlin script args reliably; use `kotlin` to run the CLI script.
 
 ## Simple TUI
-A minimal keyboard-driven TUI is available at `tools/api-tui.main.kts`.
+A minimal keyboard-driven TUI is available at `tools/slhaf-hub-tui.kts`.
 
 Run:
 ```bash
-kotlin tools/api-tui.main.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token
+kotlin tools/slhaf-hub-tui.kts --base-url=http://127.0.0.1:8080 --token-file=./scripts/.host-api-token
 ```
 
 Keys:
