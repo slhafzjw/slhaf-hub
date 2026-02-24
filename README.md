@@ -16,7 +16,7 @@ Watch mode:
 
 ## Run Web host (Ktor)
 ```bash
-./gradlew runWeb --args='--port=8080 --scripts-dir=./scripts'
+./gradlew runWeb --args='--host=0.0.0.0 --port=8080 --scripts-dir=./scripts'
 ```
 
 Auth:

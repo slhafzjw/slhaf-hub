@@ -16,7 +16,7 @@ import java.io.File
 
 private const val DEFAULT_PORT = 8080
 private const val DEFAULT_SCRIPTS_DIR = "scripts"
-private const val HOST = "127.0.0.1"
+private const val DEFAULT_HOST = "0.0.0.0"
 
 private fun Application.module(scriptsDir: File, apiToken: String) {
     routing {
@@ -74,7 +74,7 @@ private fun usage() {
     println(
         """
 Usage:
-  ./gradlew runWeb --args='[--port=8080] [--scripts-dir=./scripts]'
+  ./gradlew runWeb --args='[--host=0.0.0.0] [--port=8080] [--scripts-dir=./scripts]'
 Routes:
   GET  /health
   Authorization:
@@ -104,12 +104,13 @@ fun main(args: Array<String>) {
     }
 
     val port = cli.optionValue("--port=")?.toIntOrNull() ?: DEFAULT_PORT
+    val host = cli.optionValue("--host=")?.ifBlank { DEFAULT_HOST } ?: DEFAULT_HOST
     val scriptsDir = File(cli.optionValue("--scripts-dir=") ?: DEFAULT_SCRIPTS_DIR).absoluteFile
 
     if (!scriptsDir.exists()) scriptsDir.mkdirs()
     val auth = loadOrCreateApiToken(scriptsDir)
 
-    println("Starting script web host on http://$HOST:$port")
+    println("Starting script web host on http://$host:$port")
     println("Scripts directory: ${scriptsDir.absolutePath}")
     println("Auth token source: ${auth.source}")
     when {
@@ -119,7 +120,7 @@ fun main(args: Array<String>) {
         else -> println("Auth token loaded from file: ${auth.tokenFile?.absolutePath}")
     }
 
-    embeddedServer(Netty, port = port, host = HOST) {
+    embeddedServer(Netty, port = port, host = host) {
         module(scriptsDir, auth.token)
     }.start(wait = true)
 }

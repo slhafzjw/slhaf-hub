@@ -15,4 +15,4 @@ services:
       HOST_API_TOKEN: ${HOST_API_TOKEN:-}
     volumes:
       - ./scripts:/app/scripts
-    command: ["--port=8080", "--scripts-dir=/app/scripts"]
+    command: ["--host=0.0.0.0", "--port=8080", "--scripts-dir=/app/scripts"]

@@ -9,7 +9,7 @@ COPY gradle gradle
 COPY build.gradle.kts settings.gradle.kts ./
 COPY src src
 
-RUN ./gradlew --no-daemon clean installDist
+RUN gradle --no-daemon clean installDist
 
 FROM ${RUNTIME_IMAGE}
 WORKDIR /app
@@ -20,4 +20,4 @@ RUN mkdir -p /app/scripts
 EXPOSE 8080
 
 ENTRYPOINT ["/app/kotlin-scripts-host/bin/kotlin-scripts-host"]
-CMD ["--port=8080", "--scripts-dir=/app/scripts"]
+CMD ["--host=0.0.0.0", "--port=8080", "--scripts-dir=/app/scripts"]
