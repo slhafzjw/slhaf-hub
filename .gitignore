@@ -5,3 +5,4 @@ out/
 .kotlin/
 *.db
 scripts/.host-api-token
+/.gradle-user/
