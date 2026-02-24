@@ -22,6 +22,9 @@ dependencies {
     implementation("io.ktor:ktor-server-core-jvm:2.3.13")
     implementation("io.ktor:ktor-server-netty-jvm:2.3.13")
     runtimeOnly("ch.qos.logback:logback-classic:1.5.18")
+
+    testImplementation(kotlin("test"))
+    testImplementation("io.ktor:ktor-server-test-host-jvm:2.3.13")
 }
 
 kotlin {
@@ -30,6 +33,10 @@ kotlin {
 
 application {
     mainClass.set("work.slhaf.hub.WebHostKt")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 val runCli by tasks.registering(JavaExec::class) {

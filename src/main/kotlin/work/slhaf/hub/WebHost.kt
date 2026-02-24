@@ -90,7 +90,7 @@ private suspend fun handleSubTokenDelete(call: io.ktor.server.application.Applic
     call.respondText("deleted subtoken: $name")
 }
 
-private fun Application.module(scriptsDir: File, security: HostSecurity, runConcurrencyLimiter: Semaphore) {
+fun Application.webModule(scriptsDir: File, security: HostSecurity, runConcurrencyLimiter: Semaphore) {
     routing {
         get("/health") {
             call.respondText("OK")
@@ -266,6 +266,6 @@ fun main(args: Array<String>) {
     }
 
     embeddedServer(Netty, port = port, host = host) {
-        module(scriptsDir, security, runConcurrencyLimiter)
+        webModule(scriptsDir, security, runConcurrencyLimiter)
     }.start(wait = true)
 }
