@@ -27,24 +27,15 @@ data class RunProfile(
     val body: String = "",
 )
 
-private val RESET = "\u001b[0m"
-private val BOLD = "\u001b[1m"
-private val DIM = "\u001b[2m"
-private val CYAN = "\u001b[36m"
-private val GREEN = "\u001b[32m"
-private val YELLOW = "\u001b[33m"
-private val RED = "\u001b[31m"
-private val BG_BLUE = "\u001b[44m"
-private val FG_BLACK = "\u001b[30m"
-
-private fun ok(text: String) = "$GREEN$text$RESET"
-private fun warn(text: String) = "$YELLOW$text$RESET"
-private fun err(text: String) = "$RED$text$RESET"
-private fun accent(text: String) = "$CYAN$text$RESET"
-private fun selected(text: String) = "$BG_BLUE$FG_BLACK$BOLD$text$RESET"
-
 enum class Key {
-    UP, DOWN, LEFT, RIGHT, ENTER, Q, OTHER,
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT,
+    ENTER,
+    SPACE,
+    Q,
+    OTHER,
 }
 
 enum class FocusRow {
@@ -54,6 +45,24 @@ enum class FocusRow {
     SYSTEM,
 }
 
+private val RESET = "\u001b[0m"
+private val BOLD = "\u001b[1m"
+private val DIM = "\u001b[2m"
+private val CYAN = "\u001b[36m"
+private val GREEN = "\u001b[32m"
+private val YELLOW = "\u001b[33m"
+private val RED = "\u001b[31m"
+private val BG_BLUE = "\u001b[44m"
+private val FG_BLACK = "\u001b[30m"
+val ENV_API_BASE_URL = "HOST_API_BASE_URL"
+val ENV_API_TOKEN = "HOST_API_TOKEN"
+
+private fun ok(text: String) = "$GREEN$text$RESET"
+private fun warn(text: String) = "$YELLOW$text$RESET"
+private fun err(text: String) = "$RED$text$RESET"
+private fun accent(text: String) = "$CYAN$text$RESET"
+private fun selected(text: String) = "$BG_BLUE$FG_BLACK$BOLD$text$RESET"
+
 fun usage(): String =
     """
 Usage:
@@ -62,7 +71,7 @@ Usage:
 Layout:
   Actions:
     Target: [Scripts] [Subtokens]
-    Action: [Create] [Edit] [Delete] [Refresh] ... (depends on target)
+    Action: [...] (depends on target)
     System: [Type] [Quit]
 
 Keys:
@@ -70,6 +79,10 @@ Keys:
   Left/Right or h/l  Select item in focused row
   Enter              Execute selected Action/System
   q                  Quit
+
+Env fallback:
+  HOST_API_BASE_URL
+  HOST_API_TOKEN
     """.trimIndent()
 
 fun parseOptions(args: List<String>): Options {
@@ -77,7 +90,8 @@ fun parseOptions(args: List<String>): Options {
         println(usage())
         exitProcess(0)
     }
-    var baseUrl = "http://127.0.0.1:8080"
+
+    var baseUrl = System.getenv(ENV_API_BASE_URL)?.trim().orEmpty().ifBlank { "http://127.0.0.1:8080" }
     var token: String? = null
     var tokenFile: String? = null
     args.forEach { arg ->
@@ -98,7 +112,7 @@ fun readToken(options: Options): String {
         if (!file.exists()) error("Token file not found: ${file.absolutePath}")
         return file.readText().trim()
     }
-    return System.getenv("HOST_API_TOKEN")?.trim()
+    return System.getenv(ENV_API_TOKEN)?.trim()
         ?: error("Missing token. Use --token or --token-file or HOST_API_TOKEN")
 }
 
@@ -164,6 +178,7 @@ fun readKey(): Key {
     if (first == -1) return Key.OTHER
     return when (first) {
         10, 13 -> Key.ENTER
+        32 -> Key.SPACE
         'q'.code, 'Q'.code -> Key.Q
         'k'.code, 'K'.code -> Key.UP
         'j'.code, 'J'.code -> Key.DOWN
@@ -180,7 +195,9 @@ fun readKey(): Key {
                     'D'.code -> Key.LEFT
                     else -> Key.OTHER
                 }
-            } else Key.OTHER
+            } else {
+                Key.OTHER
+            }
         }
         else -> Key.OTHER
     }
@@ -188,6 +205,14 @@ fun readKey(): Key {
 
 fun clearScreen() {
     print("\u001b[2J\u001b[H")
+}
+
+fun terminalRows(): Int {
+    val fromEnv = System.getenv("LINES")?.toIntOrNull()
+    if (fromEnv != null && fromEnv > 0) return fromEnv
+    val fromStty = shell("stty size < /dev/tty 2>/dev/null | awk '{print $1}'").trim().toIntOrNull()
+    if (fromStty != null && fromStty > 0) return fromStty
+    return 40
 }
 
 fun colorizeStatusLine(line: String): String =
@@ -198,10 +223,73 @@ fun colorizeStatusLine(line: String): String =
         else -> line
     }
 
-fun drawRow(label: String, items: List<String>, selectedIdx: Int, focused: Boolean) {
-    print("  ${if (focused) selected("$label") else "$DIM$label$RESET"}: ")
+fun prettyPrintJsonOrKeep(raw: String): String {
+    val text = raw.trim()
+    if (!(text.startsWith("{") || text.startsWith("["))) return raw
+    return runCatching { prettyJson(text) }.getOrElse { raw }
+}
+
+fun prettyJson(input: String): String {
+    val sb = StringBuilder(input.length + 32)
+    var indent = 0
+    var inString = false
+    var escaping = false
+
+    fun appendIndent() {
+        repeat(indent) { sb.append("  ") }
+    }
+
+    input.forEach { ch ->
+        if (inString) {
+            sb.append(ch)
+            if (escaping) {
+                escaping = false
+            } else if (ch == '\\') {
+                escaping = true
+            } else if (ch == '"') {
+                inString = false
+            }
+            return@forEach
+        }
+
+        when (ch) {
+            ' ', '\n', '\r', '\t' -> {
+                // ignore insignificant whitespace outside strings
+            }
+            '"' -> {
+                inString = true
+                sb.append(ch)
+            }
+            '{', '[' -> {
+                sb.append(ch).append('\n')
+                indent += 1
+                appendIndent()
+            }
+            '}', ']' -> {
+                sb.append('\n')
+                indent = (indent - 1).coerceAtLeast(0)
+                appendIndent()
+                sb.append(ch)
+            }
+            ',' -> {
+                sb.append(ch).append('\n')
+                appendIndent()
+            }
+            ':' -> sb.append(": ")
+            else -> sb.append(ch)
+        }
+    }
+    return sb.toString()
+}
+
+fun responseText(tag: String, status: Int, body: String): String =
+    "[$tag] HTTP $status\n${prettyPrintJsonOrKeep(body)}"
+
+fun drawRow(label: String, items: List<String>, selectedIdx: Int, focused: Boolean, highlightOnlyWhenFocused: Boolean = false) {
+    print("  ${if (focused) selected(label) else "$DIM$label$RESET"}: ")
     items.forEachIndexed { idx, name ->
-        if (idx == selectedIdx) print(selected(" $name ")) else print("[${accent(name)}] ")
+        val shouldHighlight = idx == selectedIdx && (!highlightOnlyWhenFocused || focused)
+        if (shouldHighlight) print(selected(" $name ")) else print("[${accent(name)}] ")
     }
     println()
 }
@@ -228,7 +316,7 @@ fun draw(
     println("${BOLD}Actions:$RESET")
     drawRow("Target", targetOptions, targetIdx, focus == FocusRow.TARGET)
     drawRow("Action", actionOptions, actionIdx, focus == FocusRow.ACTION)
-    drawRow("System", systemOptions, systemIdx, focus == FocusRow.SYSTEM)
+    drawRow("System", systemOptions, systemIdx, focus == FocusRow.SYSTEM, highlightOnlyWhenFocused = true)
 
     println()
     println("${BOLD}$listTitle:$RESET ${if (focus == FocusRow.LIST) selected(" selected ") else ""}")
@@ -244,7 +332,54 @@ fun draw(
 
     println()
     println("${BOLD}Output:$RESET")
-    output.lines().takeLast(max(1, 18)).forEach { println(colorizeStatusLine(it)) }
+    val reservedRows = 14
+    val outputRows = max(1, terminalRows() - reservedRows)
+    val lines = output.lines()
+    val bodyLooksJson = output.contains("\n{") || output.contains("\n[")
+    val visible = if (bodyLooksJson) lines.take(outputRows) else lines.takeLast(outputRows)
+    visible.forEach { println(colorizeStatusLine(it)) }
+}
+
+fun drawRunConfig(scriptName: String, profile: RunProfile, selected: Int, hint: String) {
+    clearScreen()
+    println("${accent("Run Config")}  ${DIM}script=$scriptName$RESET")
+    println("${DIM}Up/Down select | Left/Right toggle | Enter edit/execute | q cancel$RESET")
+    println()
+
+    val rows = listOf(
+        "Method: ${profile.method}",
+        "Query: ${profile.queryRaw.ifBlank { "(empty)" }}",
+        "Body: ${if (profile.method == "POST") profile.body.ifBlank { "(empty)" } else "(ignored for GET)"}",
+        "Execute",
+        "Cancel",
+    )
+    rows.forEachIndexed { idx, row ->
+        if (idx == selected) println(" ${selected("> $row")}") else println("   $row")
+    }
+
+    println()
+    println("${BOLD}Hint:$RESET ${colorizeStatusLine(hint)}")
+}
+
+fun drawScriptPicker(title: String, scripts: List<String>, cursor: Int, selectedScripts: Set<String>, hint: String) {
+    clearScreen()
+    println("${accent(title)}")
+    println("${DIM}Up/Down select | Space toggle | Enter submit | q cancel$RESET")
+    println()
+
+    if (scripts.isEmpty()) {
+        println("  ${DIM}(no scripts)$RESET")
+    } else {
+        scripts.forEachIndexed { idx, name ->
+            val mark = if (selectedScripts.contains(name)) "[x]" else "[ ]"
+            val row = "$mark $name"
+            if (idx == cursor) println(" ${selected("> $row")}") else println("   $row")
+        }
+    }
+
+    println()
+    println("${BOLD}Selected:${RESET} ${selectedScripts.sorted().joinToString(", ").ifBlank { "(none)" }}")
+    println("${BOLD}Hint:${RESET} ${colorizeStatusLine(hint)}")
 }
 
 fun fetchScripts(client: HttpClient, baseUrl: String, token: String): Pair<List<String>, String> {
@@ -267,6 +402,14 @@ fun fetchSubtokens(client: HttpClient, baseUrl: String, token: String): Pair<Lis
     } catch (t: Throwable) {
         emptyList<String>() to "[ERROR] ${t::class.simpleName}: ${t.message}"
     }
+}
+
+fun fetchSubtokenScripts(client: HttpClient, baseUrl: String, token: String, name: String): Set<String> {
+    val (status, body) = request(client, baseUrl, token, "GET", "/subtokens/${encode(name)}")
+    if (status >= 400) error("failed to load subtoken '$name', HTTP $status: $body")
+
+    val scriptsBlock = Regex("\"scripts\"\\s*:\\s*\\[(.*?)]", setOf(RegexOption.DOT_MATCHES_ALL)).find(body)?.groupValues?.get(1) ?: ""
+    return Regex("\"([^\"]+)\"").findAll(scriptsBlock).map { it.groupValues[1] }.toSet()
 }
 
 fun chooseEditor(): String? {
@@ -365,12 +508,12 @@ fun runCreateFlow(client: HttpClient, baseUrl: String, token: String, oldStty: S
 
     if (content.isBlank()) return "[CANCEL] Empty script content."
     val (status, body) = request(client, baseUrl, token, "POST", "/scripts/${encode(scriptName)}", content)
-    return "[CREATE $scriptName] HTTP $status\n$body"
+    return responseText("CREATE $scriptName", status, body)
 }
 
 fun runEditFlow(client: HttpClient, baseUrl: String, token: String, scriptName: String, oldStty: String): String {
     val (statusGet, bodyGet) = request(client, baseUrl, token, "GET", "/scripts/${encode(scriptName)}")
-    if (statusGet >= 400) return "[EDIT $scriptName] HTTP $statusGet\n$bodyGet"
+    if (statusGet >= 400) return responseText("EDIT $scriptName", statusGet, bodyGet)
 
     val temp = File.createTempFile("apis-edit-$scriptName-", ".hub.kts")
     temp.writeText(bodyGet)
@@ -384,52 +527,88 @@ fun runEditFlow(client: HttpClient, baseUrl: String, token: String, scriptName: 
     if (edited == bodyGet) return "[CANCEL] No changes for $scriptName."
 
     val (statusPut, bodyPut) = request(client, baseUrl, token, "PUT", "/scripts/${encode(scriptName)}", edited)
-    return "[EDIT $scriptName] HTTP $statusPut\n$bodyPut"
+    return responseText("EDIT $scriptName", statusPut, bodyPut)
 }
 
 fun runDeleteFlow(client: HttpClient, baseUrl: String, token: String, scriptName: String, oldStty: String): String {
     val confirm = promptLine(oldStty, "Delete '$scriptName'? [y/N]: ").lowercase()
     if (confirm != "y" && confirm != "yes") return "[CANCEL] Delete aborted."
     val (status, body) = request(client, baseUrl, token, "DELETE", "/scripts/${encode(scriptName)}")
-    return "[DELETE $scriptName] HTTP $status\n$body"
+    return responseText("DELETE $scriptName", status, body)
 }
 
-fun normalizeScriptsInput(raw: String): String {
-    val scripts = raw.split(Regex("[,\\s]+")).map { it.trim() }.filter { it.isNotBlank() }
-    if (scripts.any { !Regex("[A-Za-z0-9._-]+$").matches(it) }) {
-        error("Invalid script names, only [A-Za-z0-9._-] allowed")
+fun pickScriptsFlow(title: String, allScripts: List<String>, preselected: Set<String>): Set<String>? {
+    if (allScripts.isEmpty()) return emptySet()
+
+    var cursor = 0
+    val selected = preselected.toMutableSet()
+    var hint = "Space to toggle, Enter to submit."
+
+    while (true) {
+        drawScriptPicker(title, allScripts, cursor, selected, hint)
+        when (readKey()) {
+            Key.UP -> cursor = if (cursor == 0) allScripts.lastIndex else cursor - 1
+            Key.DOWN -> cursor = if (cursor == allScripts.lastIndex) 0 else cursor + 1
+            Key.SPACE -> {
+                val script = allScripts[cursor]
+                if (!selected.add(script)) selected.remove(script)
+                hint = "Toggled '$script'."
+            }
+            Key.ENTER -> return selected.toSet()
+            Key.Q -> return null
+            else -> {}
+        }
     }
-    return scripts.joinToString("\n")
 }
 
 fun runSubTokenListFlow(client: HttpClient, baseUrl: String, token: String): String {
     val (status, body) = request(client, baseUrl, token, "GET", "/subtokens")
-    return "[SUB-LIST] HTTP $status\n$body"
+    return responseText("SUB-LIST", status, body)
 }
 
 fun runSubTokenShowFlow(client: HttpClient, baseUrl: String, token: String, selectedName: String?, oldStty: String): String {
     val name = selectedName ?: promptLine(oldStty, "Subtoken name: ")
     if (name.isBlank()) return "[CANCEL] Empty subtoken name."
     val (status, body) = request(client, baseUrl, token, "GET", "/subtokens/${encode(name)}")
-    return "[SUB-SHOW $name] HTTP $status\n$body"
+    return responseText("SUB-SHOW $name", status, body)
 }
 
-fun runSubTokenCreateFlow(client: HttpClient, baseUrl: String, token: String, oldStty: String): String {
+fun runSubTokenCreateFlow(
+    client: HttpClient,
+    baseUrl: String,
+    token: String,
+    oldStty: String,
+    allScripts: List<String>,
+): String {
     val name = promptLine(oldStty, "Subtoken name: ")
     if (name.isBlank()) return "[CANCEL] Empty subtoken name."
-    val scriptsRaw = promptLine(oldStty, "Allowed scripts (comma/space separated): ")
-    val body = normalizeScriptsInput(scriptsRaw)
+
+    val picked = pickScriptsFlow("Select scripts for new subtoken: $name", allScripts, emptySet())
+        ?: return "[CANCEL] Subtoken create canceled."
+
+    val body = picked.joinToString("\n")
     val (status, content) = request(client, baseUrl, token, "POST", "/subtokens/${encode(name)}", body)
-    return "[SUB-CREATE $name] HTTP $status\n$content"
+    return responseText("SUB-CREATE $name", status, content)
 }
 
-fun runSubTokenUpdateFlow(client: HttpClient, baseUrl: String, token: String, selectedName: String?, oldStty: String): String {
+fun runSubTokenUpdateFlow(
+    client: HttpClient,
+    baseUrl: String,
+    token: String,
+    selectedName: String?,
+    oldStty: String,
+    allScripts: List<String>,
+): String {
     val name = selectedName ?: promptLine(oldStty, "Subtoken name to update: ")
     if (name.isBlank()) return "[CANCEL] Empty subtoken name."
-    val scriptsRaw = promptLine(oldStty, "Allowed scripts (comma/space separated): ")
-    val body = normalizeScriptsInput(scriptsRaw)
+
+    val currentScripts = fetchSubtokenScripts(client, baseUrl, token, name)
+    val picked = pickScriptsFlow("Select scripts for subtoken: $name", allScripts, currentScripts)
+        ?: return "[CANCEL] Subtoken update canceled."
+
+    val body = picked.joinToString("\n")
     val (status, content) = request(client, baseUrl, token, "PUT", "/subtokens/${encode(name)}", body)
-    return "[SUB-UPDATE $name] HTTP $status\n$content"
+    return responseText("SUB-UPDATE $name", status, content)
 }
 
 fun runSubTokenDeleteFlow(client: HttpClient, baseUrl: String, token: String, selectedName: String?, oldStty: String): String {
@@ -438,27 +617,7 @@ fun runSubTokenDeleteFlow(client: HttpClient, baseUrl: String, token: String, se
     val confirm = promptLine(oldStty, "Delete subtoken '$name'? [y/N]: ").lowercase()
     if (confirm != "y" && confirm != "yes") return "[CANCEL] Delete aborted."
     val (status, body) = request(client, baseUrl, token, "DELETE", "/subtokens/${encode(name)}")
-    return "[SUB-DELETE $name] HTTP $status\n$body"
-}
-
-fun drawRunConfig(scriptName: String, profile: RunProfile, selected: Int, hint: String) {
-    clearScreen()
-    println("${accent("Run Config")}  ${DIM}script=$scriptName$RESET")
-    println("${DIM}Up/Down select | Left/Right toggle | Enter edit/execute | q cancel$RESET")
-    println()
-
-    val rows = listOf(
-        "Method: ${profile.method}",
-        "Query: ${profile.queryRaw.ifBlank { "(empty)" }}",
-        "Body: ${if (profile.method == "POST") profile.body.ifBlank { "(empty)" } else "(ignored for GET)"}",
-        "Execute",
-        "Cancel",
-    )
-    rows.forEachIndexed { idx, row ->
-        if (idx == selected) println(" ${selected("> $row")}") else println("   $row")
-    }
-    println()
-    println("${BOLD}Hint:$RESET ${colorizeStatusLine(hint)}")
+    return responseText("SUB-DELETE $name", status, body)
 }
 
 fun runScriptFlow(
@@ -507,7 +666,7 @@ fun runScriptFlow(
                         val query = buildQueryString(profile.queryRaw)
                         val body = if (profile.method == "POST") profile.body else null
                         val (status, response) = request(client, baseUrl, token, profile.method, "/run/${encode(scriptName)}$query", body)
-                        return "[RUN $scriptName] HTTP $status\n$response" to profile
+                        return responseText("RUN $scriptName", status, response) to profile
                     }
                     4 -> return "[CANCEL] Run aborted." to null
                 }
@@ -536,6 +695,7 @@ fun main(args: Array<String>) {
     val options = parseOptions(args.toList())
     val token = readToken(options)
     val client = HttpClient.newHttpClient()
+
     val (tokenInfo, tokenInfoText) =
         runCatching { fetchTokenInfo(client, options.baseUrl, token) }
             .getOrElse { t ->
@@ -565,6 +725,7 @@ fun main(args: Array<String>) {
         val initScripts = fetchScripts(client, options.baseUrl, token)
         scripts = initScripts.first
         output += "\n" + initScripts.second
+
         if (tokenInfo.tokenType == "root") {
             val initSubs = fetchSubtokens(client, options.baseUrl, token)
             subtokens = initSubs.first
@@ -574,6 +735,7 @@ fun main(args: Array<String>) {
         while (true) {
             val targets = targetOptions(tokenInfo)
             if (targetIdx > targets.lastIndex) targetIdx = 0
+
             val currentTarget = targets[targetIdx]
             val actions = actionOptions(tokenInfo, currentTarget)
             if (actionIdx > actions.lastIndex) actionIdx = 0
@@ -665,13 +827,13 @@ fun main(args: Array<String>) {
                                         }
                                         "Show" -> runSubTokenShowFlow(client, options.baseUrl, token, selectedItem, oldStty)
                                         "Create" -> {
-                                            val text = runSubTokenCreateFlow(client, options.baseUrl, token, oldStty)
+                                            val text = runSubTokenCreateFlow(client, options.baseUrl, token, oldStty, scripts)
                                             val res = fetchSubtokens(client, options.baseUrl, token)
                                             subtokens = res.first
                                             text + "\n" + res.second
                                         }
                                         "Update" -> {
-                                            val text = runSubTokenUpdateFlow(client, options.baseUrl, token, selectedItem, oldStty)
+                                            val text = runSubTokenUpdateFlow(client, options.baseUrl, token, selectedItem, oldStty, scripts)
                                             val res = fetchSubtokens(client, options.baseUrl, token)
                                             subtokens = res.first
                                             text + "\n" + res.second
@@ -697,7 +859,7 @@ fun main(args: Array<String>) {
                                         "Show" -> {
                                             val script = selectedItem ?: return@runCatching "No scripts."
                                             val (status, body) = request(client, options.baseUrl, token, "GET", "/scripts/${encode(script)}")
-                                            "[SHOW $script] HTTP $status\n$body"
+                                            responseText("SHOW $script", status, body)
                                         }
                                         "Run" -> {
                                             val script = selectedItem ?: return@runCatching "No scripts."
@@ -709,7 +871,7 @@ fun main(args: Array<String>) {
                                         "Meta" -> {
                                             val script = selectedItem ?: return@runCatching "No scripts."
                                             val (status, body) = request(client, options.baseUrl, token, "GET", "/meta/${encode(script)}")
-                                            "[META $script] HTTP $status\n$body"
+                                            responseText("META $script", status, body)
                                         }
                                         "Create" -> {
                                             val text = runCreateFlow(client, options.baseUrl, token, oldStty)

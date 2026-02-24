@@ -9,6 +9,9 @@ import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import kotlin.system.exitProcess
 
+val ENV_API_BASE_URL = "HOST_API_BASE_URL"
+val ENV_API_TOKEN = "HOST_API_TOKEN"
+
 data class GlobalOptions(
     val baseUrl: String,
     val token: String?,
@@ -27,7 +30,7 @@ Usage:
   elide run api-cli.main.kts [global options] <command> [command options]
 
 Global options:
-  --base-url=<url>               Default: http://127.0.0.1:8080
+  --base-url=<url>               Default: HOST_API_BASE_URL or http://127.0.0.1:8080
   --token=<token>                Authorization token
   --token-file=<path>            Load token from file (fallback: HOST_API_TOKEN env)
 
@@ -60,7 +63,7 @@ fun parseInput(args: List<String>): ParsedInput {
         exitProcess(0)
     }
 
-    var baseUrl = "http://127.0.0.1:8080"
+    var baseUrl = System.getenv(ENV_API_BASE_URL)?.trim().orEmpty().ifBlank { "http://127.0.0.1:8080" }
     var token: String? = null
     var tokenFile: String? = null
     var i = 0
@@ -88,7 +91,7 @@ fun readToken(options: GlobalOptions): String? {
         if (!file.exists()) error("Token file not found: ${file.absolutePath}")
         return file.readText().trim().ifBlank { null }
     }
-    return System.getenv("HOST_API_TOKEN")?.trim()?.ifBlank { null }
+    return System.getenv(ENV_API_TOKEN)?.trim()?.ifBlank { null }
 }
 
 fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
