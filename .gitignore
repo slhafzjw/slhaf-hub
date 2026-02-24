@@ -1,0 +1,7 @@
+.gradle/
+build/
+out/
+.idea/
+.kotlin/
+*.db
+scripts/.host-api-token
