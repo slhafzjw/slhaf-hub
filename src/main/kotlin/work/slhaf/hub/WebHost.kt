@@ -13,11 +13,14 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 
 private const val DEFAULT_PORT = 8080
 private const val DEFAULT_SCRIPTS_DIR = "scripts"
 private const val DEFAULT_HOST = "0.0.0.0"
+private val DEFAULT_MAX_RUN_CONCURRENCY = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
 
 private suspend fun handleSubTokenCreate(call: io.ktor.server.application.ApplicationCall, security: HostSecurity) {
     val name = call.parameters["name"]
@@ -87,7 +90,7 @@ private suspend fun handleSubTokenDelete(call: io.ktor.server.application.Applic
     call.respondText("deleted subtoken: $name")
 }
 
-private fun Application.module(scriptsDir: File, security: HostSecurity) {
+private fun Application.module(scriptsDir: File, security: HostSecurity, runConcurrencyLimiter: Semaphore) {
     routing {
         get("/health") {
             call.respondText("OK")
@@ -153,7 +156,9 @@ private fun Application.module(scriptsDir: File, security: HostSecurity) {
             val name = call.parameters["script"]
                 ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
             if (!requireScriptAccess(call, auth, name)) return@get
-            handleRunRequest(call, scriptsDir, consumeBody = false)
+            runConcurrencyLimiter.withPermit {
+                handleRunRequest(call, scriptsDir, consumeBody = false)
+            }
         }
 
         post("/run/{script}") {
@@ -161,7 +166,9 @@ private fun Application.module(scriptsDir: File, security: HostSecurity) {
             val name = call.parameters["script"]
                 ?: return@post call.respondText("missing route name", status = HttpStatusCode.BadRequest)
             if (!requireScriptAccess(call, auth, name)) return@post
-            handleRunRequest(call, scriptsDir, consumeBody = true)
+            runConcurrencyLimiter.withPermit {
+                handleRunRequest(call, scriptsDir, consumeBody = true)
+            }
         }
 
         get("/subtokens") {
@@ -200,7 +207,7 @@ private fun usage() {
     println(
         """
 Usage:
-  ./gradlew runWeb --args='[--host=0.0.0.0] [--port=8080] [--scripts-dir=./scripts]'
+  ./gradlew runWeb --args='[--host=0.0.0.0] [--port=8080] [--scripts-dir=./scripts] [--max-run-concurrency=N]'
 Routes:
   GET  /health
   GET  /type
@@ -238,13 +245,17 @@ fun main(args: Array<String>) {
     val port = cli.optionValue("--port=")?.toIntOrNull() ?: DEFAULT_PORT
     val host = cli.optionValue("--host=")?.ifBlank { DEFAULT_HOST } ?: DEFAULT_HOST
     val scriptsDir = File(cli.optionValue("--scripts-dir=") ?: DEFAULT_SCRIPTS_DIR).absoluteFile
+    val maxRunConcurrency = cli.optionValue("--max-run-concurrency=")?.toIntOrNull() ?: DEFAULT_MAX_RUN_CONCURRENCY
+    require(maxRunConcurrency > 0) { "--max-run-concurrency must be > 0" }
 
     if (!scriptsDir.exists()) scriptsDir.mkdirs()
     val auth = loadOrCreateApiToken(scriptsDir)
     val security = createHostSecurity(scriptsDir, auth.token)
+    val runConcurrencyLimiter = Semaphore(maxRunConcurrency)
 
     println("Starting script web host on http://$host:$port")
     println("Scripts directory: ${scriptsDir.absolutePath}")
+    println("Run concurrency limit: $maxRunConcurrency")
     println("Auth token source: ${auth.source}")
     when {
         auth.source.startsWith("env:") -> println("Auth token loaded from environment variable.")
@@ -255,6 +266,6 @@ fun main(args: Array<String>) {
     }
 
     embeddedServer(Netty, port = port, host = host) {
-        module(scriptsDir, security)
+        module(scriptsDir, security, runConcurrencyLimiter)
     }.start(wait = true)
 }
