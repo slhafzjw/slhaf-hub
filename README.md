@@ -119,3 +119,23 @@ Create/Edit/Delete behavior:
 Editor selection:
 - First uses `$EDITOR`
 - Fallback to first available of `nvim`, `vim`, `nano`
+
+## Docker
+Build image:
+```bash
+docker build -t slhaf-hub:latest .
+```
+
+Run container (mount local scripts directory):
+```bash
+docker run --rm -p 8080:8080 \
+  -v /tmp/kotlin-scripts/scripts:/app/scripts \
+  -e HOST_API_TOKEN=your-token \
+  slhaf-hub:latest
+```
+
+Then call APIs:
+```bash
+curl http://127.0.0.1:8080/health
+curl -H "Authorization: Bearer your-token" http://127.0.0.1:8080/scripts
+```

@@ -29,7 +29,7 @@ kotlin {
 }
 
 application {
-    mainClass.set("work.slhaf.hub.CliHostKt")
+    mainClass.set("work.slhaf.hub.WebHostKt")
 }
 
 val runCli by tasks.registering(JavaExec::class) {

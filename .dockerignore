@@ -1,0 +1,8 @@
+.git
+.gradle
+.gradle-user
+.idea
+.kotlin
+build
+kls_database.db
+scripts/.host-api-token
