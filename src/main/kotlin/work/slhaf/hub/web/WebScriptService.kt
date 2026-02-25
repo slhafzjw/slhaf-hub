@@ -59,6 +59,7 @@ private fun metadataValidationMessage(errors: List<String>): String =
         appendLine("examples:")
         appendLine("// @desc: Demo greeting API")
         appendLine("// @timeout: 10s")
+        appendLine("// @response: text")
         appendLine("// @param: name | required=false | default=world | desc=Name to greet")
     }.trim()
 
@@ -92,13 +93,21 @@ private fun runFailureMessage(result: ScriptExecutionResult): String {
 
 fun metadataJson(scriptName: String, metadata: ScriptMetadata, source: String): String {
     val description = metadata.description?.let { "\"${it.jsonEscaped()}\"" } ?: "null"
+    val responseType = metadata.responseType.name.lowercase()
     val params = metadata.params.joinToString(",") { param ->
         val defaultValue = param.defaultValue?.let { "\"${it.jsonEscaped()}\"" } ?: "null"
         val desc = param.description?.let { "\"${it.jsonEscaped()}\"" } ?: "null"
         """{"name":"${param.name.jsonEscaped()}","required":${param.required},"defaultValue":$defaultValue,"description":$desc}"""
     }
-    return """{"script":"${scriptName.jsonEscaped()}","source":"${source.jsonEscaped()}","description":$description,"timeoutMs":${metadata.timeoutMs},"params":[$params]}"""
+    return """{"script":"${scriptName.jsonEscaped()}","source":"${source.jsonEscaped()}","description":$description,"timeoutMs":${metadata.timeoutMs},"responseType":"$responseType","params":[$params]}"""
 }
+
+private fun contentTypeFor(metadata: ScriptMetadata): ContentType =
+    when (metadata.responseType) {
+        ScriptResponseType.TEXT -> ContentType.Text.Plain
+        ScriptResponseType.JSON -> ContentType.Application.Json
+        ScriptResponseType.HTML -> ContentType.Text.Html
+    }
 
 fun loadMetadata(script: File): Pair<ScriptMetadata, String> {
     val cached = cachedMetadata(script)
@@ -255,7 +264,7 @@ suspend fun handleRunRequest(call: ApplicationCall, scriptsDir: File, consumeBod
             runFailureMessage(result)
         },
         status = status,
-        contentType = ContentType.Text.Plain
+        contentType = if (result.ok) contentTypeFor(metadata) else ContentType.Text.Plain
     )
 }
 

@@ -57,6 +57,7 @@ class WebAuthAndScriptApiTest : WebHostTestSupport() {
         val metaText = meta.bodyAsText()
         assertTrue(metaText.contains("\"script\":\"demo\""))
         assertTrue(metaText.contains("\"timeoutMs\":10000"))
+        assertTrue(metaText.contains("\"responseType\":\"text\""))
 
         val run = client.get("/run/demo?name=Alice") { bearerRoot() }
         assertEquals(HttpStatusCode.OK, run.status)
@@ -102,6 +103,27 @@ class WebAuthAndScriptApiTest : WebHostTestSupport() {
         val body = create.bodyAsText()
         assertTrue(body.contains("metadata validation failed"))
         assertTrue(body.contains("missing required option"))
+    }
+
+    @Test
+    fun metadataRejectsUnsupportedResponseType() = withApp { _ ->
+        val create = client.post("/scripts/bad-response") {
+            bearerRoot()
+            setBody(
+                """
+                // @desc: bad response
+                // @response: xml
+                // @param: name | required=false | default=world | desc=name
+                val args: Array<String> = emptyArray()
+                println("ok")
+                """.trimIndent()
+            )
+        }
+        assertEquals(HttpStatusCode.BadRequest, create.status)
+        val body = create.bodyAsText()
+        assertTrue(body.contains("metadata validation failed"))
+        assertTrue(body.contains("invalid @response"))
+        assertTrue(body.contains("text, json, html"))
     }
 
     @Test

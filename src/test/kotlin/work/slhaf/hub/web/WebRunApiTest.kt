@@ -5,6 +5,7 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.HttpHeaders
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -119,5 +120,44 @@ class WebRunApiTest : WebHostTestSupport() {
         val run = client.get("/run/lateinit-args") { bearerRoot() }
         assertEquals(HttpStatusCode.OK, run.status)
         assertTrue(run.bodyAsText().contains("name=world"))
+    }
+
+    @Test
+    fun runSuccessContentTypeCanBeJsonOrHtml() = withApp { _ ->
+        val createJson = client.post("/scripts/json-out") {
+            bearerRoot()
+            setBody(
+                """
+                // @desc: json output
+                // @response: json
+                val args: Array<String> = emptyArray()
+                println("{\"ok\":true}")
+                """.trimIndent()
+            )
+        }
+        assertEquals(HttpStatusCode.Created, createJson.status)
+
+        val runJson = client.get("/run/json-out") { bearerRoot() }
+        assertEquals(HttpStatusCode.OK, runJson.status)
+        assertTrue((runJson.headers[HttpHeaders.ContentType] ?: "").startsWith("application/json"))
+        assertTrue(runJson.bodyAsText().contains("\"ok\":true"))
+
+        val createHtml = client.post("/scripts/html-out") {
+            bearerRoot()
+            setBody(
+                """
+                // @desc: html output
+                // @response: html
+                val args: Array<String> = emptyArray()
+                println("<h1>ok</h1>")
+                """.trimIndent()
+            )
+        }
+        assertEquals(HttpStatusCode.Created, createHtml.status)
+
+        val runHtml = client.get("/run/html-out") { bearerRoot() }
+        assertEquals(HttpStatusCode.OK, runHtml.status)
+        assertTrue((runHtml.headers[HttpHeaders.ContentType] ?: "").startsWith("text/html"))
+        assertTrue(runHtml.bodyAsText().contains("<h1>ok</h1>"))
     }
 }

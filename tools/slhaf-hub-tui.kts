@@ -476,6 +476,7 @@ fun initialScriptTemplate(name: String): String =
     """
 // @desc: $name
 // @timeout: 10s
+// @response: text
 // @param: sample | required=false | default=value | desc=example parameter
 
 lateinit var args: Array<String>

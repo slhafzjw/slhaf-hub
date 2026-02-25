@@ -6,12 +6,14 @@ import java.util.concurrent.ConcurrentHashMap
 private val metadataCache = ConcurrentHashMap<String, Pair<String, ScriptMetadata>>() // key -> stamp, metadata
 private const val DEFAULT_SCRIPT_TIMEOUT_MS = 10_000L
 private val metadataParamNameRegex = Regex("[A-Za-z0-9._-]+")
+private val supportedResponseValues = setOf("text", "json", "html")
 
 internal fun scriptStamp(file: File): String = "${file.length()}-${file.lastModified()}"
 
 private fun parseMetadataFromComments(scriptContent: String): ScriptMetadata {
     var description: String? = null
     var timeoutMs = DEFAULT_SCRIPT_TIMEOUT_MS
+    var responseType = ScriptResponseType.TEXT
     val params = mutableListOf<ScriptParamDefinition>()
 
     scriptContent.lines().forEach { raw ->
@@ -26,6 +28,15 @@ private fun parseMetadataFromComments(scriptContent: String): ScriptMetadata {
         if (comment.startsWith("@timeout:", ignoreCase = true)) {
             val raw = comment.substringAfter(":").trim()
             parseTimeoutMs(raw)?.let { timeoutMs = it }
+            return@forEach
+        }
+        if (comment.startsWith("@response:", ignoreCase = true)) {
+            val raw = comment.substringAfter(":").trim().lowercase()
+            responseType = when (raw) {
+                "json" -> ScriptResponseType.JSON
+                "html" -> ScriptResponseType.HTML
+                else -> ScriptResponseType.TEXT
+            }
             return@forEach
         }
         if (comment.startsWith("@param:", ignoreCase = true)) {
@@ -61,7 +72,12 @@ private fun parseMetadataFromComments(scriptContent: String): ScriptMetadata {
         }
     }
 
-    return ScriptMetadata(description = description, params = params, timeoutMs = timeoutMs)
+    return ScriptMetadata(
+        description = description,
+        params = params,
+        timeoutMs = timeoutMs,
+        responseType = responseType,
+    )
 }
 
 fun validateScriptMetadata(scriptContent: String): List<String> {
@@ -78,6 +94,13 @@ fun validateScriptMetadata(scriptContent: String): List<String> {
             val rawTimeout = comment.substringAfter(":").trim()
             if (parseTimeoutMs(rawTimeout) == null) {
                 errors += "line $lineNo: invalid @timeout '$rawTimeout'. expected format: '@timeout: 10s' or '500ms' or '1m'."
+            }
+            return@forEachIndexed
+        }
+        if (comment.startsWith("@response:", ignoreCase = true)) {
+            val rawResponse = comment.substringAfter(":").trim().lowercase()
+            if (rawResponse !in supportedResponseValues) {
+                errors += "line $lineNo: invalid @response '$rawResponse'. expected one of: text, json, html."
             }
             return@forEachIndexed
         }

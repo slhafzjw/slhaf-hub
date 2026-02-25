@@ -2,6 +2,7 @@
 // @timeout: 10s
 // @param: name   | default=world | desc=hello <name> | required=false
 // @param: upper  | default=false | desc=upper text   | required=false
+// @response: json
 import java.time.LocalDateTime
 
 lateinit var args: Array<String>

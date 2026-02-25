@@ -36,6 +36,7 @@ Global options:
 
 Commands:
   health
+  template <script>
   type
   list
   show <script>
@@ -52,6 +53,7 @@ Commands:
   sub-delete <name>
 
 Examples:
+  kotlin slhaf-hub-cli.kts template hello
   kotlin slhaf-hub-cli.kts --token-file=./scripts/.host-api-token type
   kotlin slhaf-hub-cli.kts --token-file=./scripts/.host-api-token sub-list
   kotlin slhaf-hub-cli.kts --token-file=./scripts/.host-api-token sub-create demo --scripts=hello,time
@@ -159,6 +161,23 @@ fun parseScriptsArg(args: List<String>): Set<String> {
     return items
 }
 
+fun initialScriptTemplate(name: String): String =
+    """
+// @desc: $name
+// @timeout: 10s
+// @response: text
+// @param: sample | required=false | default=value | desc=example parameter
+
+lateinit var args: Array<String>
+val kv = args.mapNotNull {
+    val i = it.indexOf('=')
+    if (i <= 0) null else it.substring(0, i) to it.substring(i + 1)
+}.toMap()
+
+println("script=$name")
+println("sample=" + (kv["sample"] ?: "value"))
+    """.trimIndent()
+
 fun request(
     client: HttpClient,
     baseUrl: String,
@@ -198,6 +217,10 @@ fun main(args: Array<String>) {
         val (status, body) =
             when (input.command) {
                 "health" -> request(client, base, null, "GET", "/health")
+                "template" -> {
+                    val script = requireScriptName(input.commandArgs)
+                    200 to initialScriptTemplate(script)
+                }
                 "type" -> request(client, base, token, "GET", "/type")
                 "list" -> request(client, base, token, "GET", "/scripts")
                 "show" -> {
