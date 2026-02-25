@@ -21,6 +21,16 @@ import org.slf4j.LoggerFactory
 import java.io.File
 
 private val requestLogger = LoggerFactory.getLogger("work.slhaf.hub.RequestAudit")
+private val subTokenPathRegex = Regex("^/u/([^/]+)/")
+
+private fun sanitizeRequestPath(path: String): String {
+    val match = subTokenPathRegex.find(path) ?: return path
+    val credential = match.groupValues[1]
+    val at = credential.indexOf('@')
+    if (at <= 0 || at == credential.lastIndex) return path
+    val nameOnly = credential.substring(0, at)
+    return path.replaceFirst("/u/$credential/", "/u/$nameOnly@***/")
+}
 
 private suspend inline fun withRequestAudit(
     call: ApplicationCall,
@@ -41,13 +51,14 @@ private suspend inline fun withRequestAudit(
         val tokenType = auth?.type?.name?.lowercase() ?: "none"
         val subToken = auth?.subTokenName ?: "-"
         val script = call.parameters["script"] ?: "-"
+        val sanitizedPath = sanitizeRequestPath(call.request.path())
         val status = call.response.status()?.value ?: if (thrown == null) 200 else 500
         if (thrown == null) {
             requestLogger.info(
                 "endpoint={} method={} path={} status={} durationMs={} tokenType={} subToken={} script={}",
                 endpoint,
                 call.request.httpMethod.value,
-                call.request.path(),
+                sanitizedPath,
                 status,
                 durationMs,
                 tokenType,
@@ -59,7 +70,7 @@ private suspend inline fun withRequestAudit(
                 "endpoint={} method={} path={} status={} durationMs={} tokenType={} subToken={} script={} error={}",
                 endpoint,
                 call.request.httpMethod.value,
-                call.request.path(),
+                sanitizedPath,
                 status,
                 durationMs,
                 tokenType,
