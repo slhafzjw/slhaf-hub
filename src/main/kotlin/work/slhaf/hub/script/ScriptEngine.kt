@@ -159,6 +159,54 @@ fun removeCachedMetadata(scriptFile: File) {
     compiledScriptCache.remove(scriptFile.canonicalPath)
 }
 
+fun validateCompilationAndCapture(scriptFile: File): ScriptExecutionResult {
+    synchronized(evalLock) {
+        val oldOut = System.out
+        val oldErr = System.err
+        val buffer = ByteArrayOutputStream()
+        val ps = PrintStream(buffer, true, Charsets.UTF_8.name())
+
+        return try {
+            System.setOut(ps)
+            System.setErr(ps)
+
+            val original = scriptFile.readText()
+            val metadata = metadataForFile(scriptFile, original)
+            val injected = injectArgsBridgeDeclaration(original)
+            val compilationResult = compiledScriptFor(scriptFile, injected)
+            val reports = compilationResult.reports
+            val hasErrorDiagnostics = reports.any {
+                it.severity == ScriptDiagnostic.Severity.ERROR || it.severity == ScriptDiagnostic.Severity.FATAL
+            }
+            val diagnostics = reports
+                .filter { it.severity > ScriptDiagnostic.Severity.DEBUG }
+                .joinToString("\n") {
+                    val ex = it.exception?.let { e -> ": ${e::class.simpleName}: ${e.message}" } ?: ""
+                    "[${it.severity}] ${it.message}$ex"
+                }
+
+            val output = buffer.toString(Charsets.UTF_8.name()).trim()
+            val finalText = buildString {
+                if (output.isNotEmpty()) appendLine(output)
+                if (diagnostics.isNotEmpty()) appendLine(diagnostics)
+            }.trim()
+
+            ScriptExecutionResult(
+                ok = compilationResult is ResultWithDiagnostics.Success && !hasErrorDiagnostics,
+                output = finalText,
+                metadata = metadata,
+                missingRequiredParams = emptyList(),
+                timedOut = false,
+            )
+        } finally {
+            ps.flush()
+            ps.close()
+            System.setOut(oldOut)
+            System.setErr(oldErr)
+        }
+    }
+}
+
 fun evalAndCapture(scriptFile: File, requestContext: ScriptRequestContext = ScriptRequestContext()): ScriptExecutionResult {
     return evalAndCapture(scriptFile, requestContext, enforceRequiredParams = true)
 }

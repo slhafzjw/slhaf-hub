@@ -103,4 +103,28 @@ class WebAuthAndScriptApiTest : WebHostTestSupport() {
         assertTrue(body.contains("metadata validation failed"))
         assertTrue(body.contains("missing required option"))
     }
+
+    @Test
+    fun createWithRequiredParamsValidatesByCompilationOnly() = withApp { _ ->
+        val create = client.post("/scripts/required-param-script") {
+            bearerRoot()
+            setBody(
+                """
+                // @desc: required param demo
+                // @param: owner | required=true | desc=Repository owner
+                lateinit var args: Array<String>
+                val owner = args.mapNotNull {
+                    val i = it.indexOf('=')
+                    if (i <= 0) null else it.substring(0, i) to it.substring(i + 1)
+                }.toMap()["owner"] ?: error("missing required param: owner")
+                println(owner)
+                """.trimIndent()
+            )
+        }
+        assertEquals(HttpStatusCode.Created, create.status)
+
+        val runMissing = client.get("/run/required-param-script") { bearerRoot() }
+        assertEquals(HttpStatusCode.BadRequest, runMissing.status)
+        assertTrue(runMissing.bodyAsText().contains("missing required params: owner"))
+    }
 }

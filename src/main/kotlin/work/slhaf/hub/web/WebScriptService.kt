@@ -133,7 +133,7 @@ suspend fun handleCreateScript(call: ApplicationCall, scriptsDir: File) {
     script.writeText(content)
     removeCachedMetadata(script)
 
-    val result = evalAndCapture(script, ScriptRequestContext(), enforceRequiredParams = false)
+    val result = validateCompilationAndCapture(script)
     if (!result.ok) {
         script.delete()
         removeCachedMetadata(script)
@@ -197,7 +197,7 @@ suspend fun handleUpdateScript(call: ApplicationCall, scriptsDir: File) {
     script.writeText(newContent)
     removeCachedMetadata(script)
 
-    val result = evalAndCapture(script, ScriptRequestContext(), enforceRequiredParams = false)
+    val result = validateCompilationAndCapture(script)
     if (!result.ok) {
         script.writeText(previousContent)
         removeCachedMetadata(script)
