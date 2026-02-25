@@ -5,10 +5,6 @@ plugins {
 
 val kotlinVersion = "2.2.20"
 
-repositories {
-    mavenCentral()
-}
-
 dependencies {
     implementation(kotlin("stdlib"))
 
