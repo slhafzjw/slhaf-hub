@@ -37,15 +37,15 @@ cd slhaf-hub
 docker build -t slhaf-hub:latest .
 docker run --rm -p 8080:8080 \
   -v "$(pwd)/scripts:/app/scripts" \
-  -e HOST_API_TOKEN=your-token \
+  -e SLHAF_HUB_TOKEN=your-token \
   -e MAX_RUN_CONCURRENCY=8 \
   slhaf-hub:latest
 ```
 
 #### 3) Docker Compose 启动
 ```bash
-# 可选：export HOST_API_TOKEN=your-token
-# 可选：export HOST_PORT=8080
+# 可选：export SLHAF_HUB_TOKEN=your-token
+# 可选：export SLHAF_HUB_PORT=8080
 # 可选：export MAX_RUN_CONCURRENCY=8
 docker compose up -d --build
 ```
@@ -79,7 +79,7 @@ CLI/TUI 环境变量：
 - `X-Host-Token: <token>`
 
 Token 来源优先级：
-1. 环境变量 `HOST_API_TOKEN`
+1. 环境变量 `SLHAF_HUB_TOKEN`
 2. `scripts/.host-api-token`
 3. 自动生成并写入 `scripts/.host-api-token`
 

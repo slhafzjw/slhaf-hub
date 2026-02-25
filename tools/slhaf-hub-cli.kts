@@ -9,8 +9,8 @@ import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import kotlin.system.exitProcess
 
-val ENV_API_BASE_URL = "HOST_API_BASE_URL"
-val ENV_API_TOKEN = "HOST_API_TOKEN"
+val ENV_API_BASE_URL = "SLHAF_HUB_BASE_URL"
+val ENV_API_TOKEN = "SLHAF_HUB_TOKEN"
 
 data class GlobalOptions(
     val baseUrl: String,
@@ -30,9 +30,9 @@ Usage:
   kotlin slhaf-hub-cli.kts [global options] <command> [command options]
 
 Global options:
-  --base-url=<url>               Default: HOST_API_BASE_URL or http://127.0.0.1:8080
+  --base-url=<url>               Default: SLHAF_HUB_BASE_URL or http://127.0.0.1:8080
   --token=<token>                Authorization token
-  --token-file=<path>            Load token from file (fallback: HOST_API_TOKEN env)
+  --token-file=<path>            Load token from file (fallback: SLHAF_HUB_TOKEN env)
 
 Commands:
   health

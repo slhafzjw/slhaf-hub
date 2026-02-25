@@ -54,8 +54,8 @@ private val YELLOW = "\u001b[33m"
 private val RED = "\u001b[31m"
 private val BG_BLUE = "\u001b[44m"
 private val FG_BLACK = "\u001b[30m"
-val ENV_API_BASE_URL = "HOST_API_BASE_URL"
-val ENV_API_TOKEN = "HOST_API_TOKEN"
+val ENV_API_BASE_URL = "SLHAF_HUB_BASE_URL"
+val ENV_API_TOKEN = "SLHAF_HUB_TOKEN"
 
 private fun ok(text: String) = "$GREEN$text$RESET"
 private fun warn(text: String) = "$YELLOW$text$RESET"
@@ -81,8 +81,8 @@ Keys:
   q                  Quit
 
 Env fallback:
-  HOST_API_BASE_URL
-  HOST_API_TOKEN
+  SLHAF_HUB_BASE_URL
+  SLHAF_HUB_TOKEN
     """.trimIndent()
 
 fun parseOptions(args: List<String>): Options {
@@ -113,7 +113,7 @@ fun readToken(options: Options): String {
         return file.readText().trim()
     }
     return System.getenv(ENV_API_TOKEN)?.trim()
-        ?: error("Missing token. Use --token or --token-file or HOST_API_TOKEN")
+        ?: error("Missing token. Use --token or --token-file or SLHAF_HUB_TOKEN")
 }
 
 fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)

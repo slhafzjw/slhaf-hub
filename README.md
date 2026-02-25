@@ -37,15 +37,15 @@ cd slhaf-hub
 docker build -t slhaf-hub:latest .
 docker run --rm -p 8080:8080 \
   -v "$(pwd)/scripts:/app/scripts" \
-  -e HOST_API_TOKEN=your-token \
+  -e SLHAF_HUB_TOKEN=your-token \
   -e MAX_RUN_CONCURRENCY=8 \
   slhaf-hub:latest
 ```
 
 #### 3) Run with Docker Compose
 ```bash
-# optional: export HOST_API_TOKEN=your-token
-# optional: export HOST_PORT=8080
+# optional: export SLHAF_HUB_TOKEN=your-token
+# optional: export SLHAF_HUB_PORT=8080
 # optional: export MAX_RUN_CONCURRENCY=8
 docker compose up -d --build
 ```
@@ -79,7 +79,7 @@ Auth headers:
 - `X-Host-Token: <token>`
 
 Token source priority:
-1. `HOST_API_TOKEN` env var
+1. `SLHAF_HUB_TOKEN` env var
 2. `scripts/.host-api-token`
 3. Auto-generated token saved to `scripts/.host-api-token`
 

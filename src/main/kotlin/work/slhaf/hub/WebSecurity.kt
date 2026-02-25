@@ -8,7 +8,7 @@ import io.ktor.server.response.respondText
 import java.io.File
 import java.security.SecureRandom
 
-private const val ENV_API_TOKEN = "HOST_API_TOKEN"
+private const val ENV_API_TOKEN = "SLHAF_HUB_TOKEN"
 private const val TOKEN_FILE_NAME = ".host-api-token"
 private const val SUBTOKEN_FILE_NAME = ".host-subtokens.db"
 private const val ALT_TOKEN_HEADER = "X-Host-Token"
