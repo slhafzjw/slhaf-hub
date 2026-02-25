@@ -1,10 +1,10 @@
 // @desc: hello
 // @timeout: 10s
 // @param: name   | default=world | desc=hello <name> | required=false
-// @param: upper  | default=true | desc=upper text   | required=false
+// @param: upper  | default=false | desc=upper text   | required=false
 import java.time.LocalDateTime
 
-val args: Array<String> = emptyArray()
+lateinit var args: Array<String>
 val kv =
     args
         .mapNotNull {

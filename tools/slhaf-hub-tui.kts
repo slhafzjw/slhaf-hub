@@ -478,7 +478,7 @@ fun initialScriptTemplate(name: String): String =
 // @timeout: 10s
 // @param: sample | required=false | default=value | desc=example parameter
 
-val args: Array<String> = emptyArray()
+lateinit var args: Array<String>
 val kv = args.mapNotNull {
     val i = it.indexOf('=')
     if (i <= 0) null else it.substring(0, i) to it.substring(i + 1)

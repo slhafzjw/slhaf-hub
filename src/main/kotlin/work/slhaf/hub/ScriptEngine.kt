@@ -23,7 +23,10 @@ private val metadataCache = ConcurrentHashMap<String, Pair<String, ScriptMetadat
 private val compiledScriptCache = ConcurrentHashMap<String, Pair<String, CompiledScript>>() // key -> stamp, compiled script
 
 private val resolver = CompoundDependenciesResolver(FileSystemDependenciesResolver(), MavenDependenciesResolver())
-private val argsDeclarationRegex = Regex("""^\s*val\s+args\s*:\s*Array<String>\s*=\s*emptyArray\(\)\s*$""")
+private val argsDeclarationRegexes = listOf(
+    Regex("""^\s*val\s+args\s*:\s*Array<String>\s*=\s*emptyArray\(\)\s*$"""),
+    Regex("""^\s*lateinit\s+var\s+args\s*:\s*Array<String>\s*$"""),
+)
 private const val DEFAULT_SCRIPT_TIMEOUT_MS = 10_000L
 private val metadataParamNameRegex = Regex("[A-Za-z0-9._-]+")
 private val evalExecutor = Executors.newCachedThreadPool { r ->
@@ -89,7 +92,7 @@ private fun injectArgsBridgeDeclaration(scriptContent: String): String {
     val injected = "val args: Array<String> = hostArgs"
     var replaced = false
     val result = lines.map { line ->
-        if (!replaced && argsDeclarationRegex.matches(line)) {
+        if (!replaced && argsDeclarationRegexes.any { it.matches(line) }) {
             replaced = true
             injected
         } else {

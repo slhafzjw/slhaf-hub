@@ -291,6 +291,30 @@ class WebHostApiTest {
         assertTrue(runWithArg.bodyAsText().contains("name=alice"))
     }
 
+    @Test
+    fun lateinitArgsDeclarationIsSupported() = withApp { _ ->
+        val create = client.post("/scripts/lateinit-args") {
+            bearerRoot()
+            setBody(
+                """
+                // @desc: lateinit args
+                // @param: name | required=false | default=world | desc=Name fallback
+                lateinit var args: Array<String>
+                val kv = args.mapNotNull {
+                    val i = it.indexOf('=')
+                    if (i <= 0) null else it.substring(0, i) to it.substring(i + 1)
+                }.toMap()
+                println("name=" + (kv["name"] ?: "missing"))
+                """.trimIndent()
+            )
+        }
+        assertEquals(HttpStatusCode.Created, create.status)
+
+        val run = client.get("/run/lateinit-args") { bearerRoot() }
+        assertEquals(HttpStatusCode.OK, run.status)
+        assertTrue(run.bodyAsText().contains("name=world"))
+    }
+
     private fun withApp(testBlock: suspend io.ktor.server.testing.ApplicationTestBuilder.(java.nio.file.Path) -> Unit) {
         val scriptsDir = createTempDirectory("webhost-api-test-")
         tempDirs.add(scriptsDir)
