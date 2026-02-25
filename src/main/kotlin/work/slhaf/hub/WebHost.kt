@@ -7,6 +7,8 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.request.httpMethod
+import io.ktor.server.request.path
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
@@ -17,12 +19,63 @@ import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import org.slf4j.LoggerFactory
 import java.io.File
 
 private const val DEFAULT_PORT = 8080
 private const val DEFAULT_SCRIPTS_DIR = "scripts"
 private const val DEFAULT_HOST = "0.0.0.0"
 private val DEFAULT_MAX_RUN_CONCURRENCY = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+private val requestLogger = LoggerFactory.getLogger("work.slhaf.hub.RequestAudit")
+
+private suspend inline fun withRequestAudit(
+    call: ApplicationCall,
+    endpoint: String,
+    authProvider: () -> AuthContext? = { null },
+    crossinline block: suspend () -> Unit,
+) {
+    val startNs = System.nanoTime()
+    var thrown: Throwable? = null
+    try {
+        block()
+    } catch (t: Throwable) {
+        thrown = t
+        throw t
+    } finally {
+        val durationMs = (System.nanoTime() - startNs) / 1_000_000
+        val auth = authProvider()
+        val tokenType = auth?.type?.name?.lowercase() ?: "none"
+        val subToken = auth?.subTokenName ?: "-"
+        val script = call.parameters["script"] ?: "-"
+        val status = call.response.status()?.value ?: if (thrown == null) 200 else 500
+        if (thrown == null) {
+            requestLogger.info(
+                "endpoint={} method={} path={} status={} durationMs={} tokenType={} subToken={} script={}",
+                endpoint,
+                call.request.httpMethod.value,
+                call.request.path(),
+                status,
+                durationMs,
+                tokenType,
+                subToken,
+                script,
+            )
+        } else {
+            requestLogger.warn(
+                "endpoint={} method={} path={} status={} durationMs={} tokenType={} subToken={} script={} error={}",
+                endpoint,
+                call.request.httpMethod.value,
+                call.request.path(),
+                status,
+                durationMs,
+                tokenType,
+                subToken,
+                script,
+                "${thrown::class.simpleName}: ${thrown.message}",
+            )
+        }
+    }
+}
 
 private suspend fun handleSubTokenCreate(call: io.ktor.server.application.ApplicationCall, security: HostSecurity) {
     val name = call.parameters["name"]
@@ -140,28 +193,46 @@ private fun Routing.registerHeaderAuthenticatedRoutes(
     runConcurrencyLimiter: Semaphore,
 ) {
     get("/type") {
-        val auth = requireAuth(call, security) ?: return@get
-        handleTypeForAuth(call, auth)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "type", { authForLog }) {
+            val auth = requireAuth(call, security) ?: return@withRequestAudit
+            authForLog = auth
+            handleTypeForAuth(call, auth)
+        }
     }
 
     get("/scripts") {
-        val auth = requireAuth(call, security) ?: return@get
-        handleScriptsForAuth(call, scriptsDir, auth)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "scripts.list", { authForLog }) {
+            val auth = requireAuth(call, security) ?: return@withRequestAudit
+            authForLog = auth
+            handleScriptsForAuth(call, scriptsDir, auth)
+        }
     }
 
     get("/meta/{script}") {
-        val auth = requireAuth(call, security) ?: return@get
-        handleMetaForAuth(call, scriptsDir, auth)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "meta.get", { authForLog }) {
+            val auth = requireAuth(call, security) ?: return@withRequestAudit
+            authForLog = auth
+            handleMetaForAuth(call, scriptsDir, auth)
+        }
     }
 
     get("/run/{script}") {
-        val auth = requireAuth(call, security) ?: return@get
-        handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = false)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "run.get", { authForLog }) {
+            authForLog = requireAuth(call, security) ?: return@withRequestAudit
+            handleRunForAuth(call, scriptsDir, authForLog, runConcurrencyLimiter, consumeBody = false)
+        }
     }
 
     post("/run/{script}") {
-        val auth = requireAuth(call, security) ?: return@post
-        handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = true)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "run.post", { authForLog }) {
+            authForLog = requireAuth(call, security) ?: return@withRequestAudit
+            handleRunForAuth(call, scriptsDir, authForLog, runConcurrencyLimiter, consumeBody = true)
+        }
     }
 }
 
@@ -171,92 +242,150 @@ private fun Routing.registerSubTokenPathRoutes(
     runConcurrencyLimiter: Semaphore,
 ) {
     get("/u/{subAuth}/type") {
-        val auth = requireSubTokenPathAuth(call, security) ?: return@get
-        handleTypeForAuth(call, auth)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "u.type", { authForLog }) {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@withRequestAudit
+            authForLog = auth
+            handleTypeForAuth(call, auth)
+        }
     }
 
     get("/u/{subAuth}/scripts") {
-        val auth = requireSubTokenPathAuth(call, security) ?: return@get
-        handleScriptsForAuth(call, scriptsDir, auth)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "u.scripts.list", { authForLog }) {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@withRequestAudit
+            authForLog = auth
+            handleScriptsForAuth(call, scriptsDir, auth)
+        }
     }
 
     get("/u/{subAuth}/meta/{script}") {
-        val auth = requireSubTokenPathAuth(call, security) ?: return@get
-        handleMetaForAuth(call, scriptsDir, auth)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "u.meta.get", { authForLog }) {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@withRequestAudit
+            authForLog = auth
+            handleMetaForAuth(call, scriptsDir, auth)
+        }
     }
 
     get("/u/{subAuth}/run/{script}") {
-        val auth = requireSubTokenPathAuth(call, security) ?: return@get
-        handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = false)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "u.run.get", { authForLog }) {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@withRequestAudit
+            authForLog = auth
+            handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = false)
+        }
     }
 
     post("/u/{subAuth}/run/{script}") {
-        val auth = requireSubTokenPathAuth(call, security) ?: return@post
-        handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = true)
+        var authForLog: AuthContext? = null
+        withRequestAudit(call, "u.run.post", { authForLog }) {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@withRequestAudit
+            authForLog = auth
+            handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = true)
+        }
     }
 }
 
 fun Application.webModule(scriptsDir: File, security: HostSecurity, runConcurrencyLimiter: Semaphore) {
     routing {
         get("/health") {
-            call.respondText("OK")
+            withRequestAudit(call, "health") {
+                call.respondText("OK")
+            }
         }
 
         registerHeaderAuthenticatedRoutes(scriptsDir, security, runConcurrencyLimiter)
         registerSubTokenPathRoutes(scriptsDir, security, runConcurrencyLimiter)
 
         get("/scripts/{script}") {
-            val auth = requireAuth(call, security) ?: return@get
-            if (!requireRoot(call, auth)) return@get
-            handleGetScriptContent(call, scriptsDir)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "scripts.get", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                handleGetScriptContent(call, scriptsDir)
+            }
         }
 
         post("/scripts/{script}") {
-            val auth = requireAuth(call, security) ?: return@post
-            if (!requireRoot(call, auth)) return@post
-            handleCreateScript(call, scriptsDir)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "scripts.create", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                handleCreateScript(call, scriptsDir)
+            }
         }
 
         put("/scripts/{script}") {
-            val auth = requireAuth(call, security) ?: return@put
-            if (!requireRoot(call, auth)) return@put
-            handleUpdateScript(call, scriptsDir)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "scripts.update", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                handleUpdateScript(call, scriptsDir)
+            }
         }
 
         delete("/scripts/{script}") {
-            val auth = requireAuth(call, security) ?: return@delete
-            if (!requireRoot(call, auth)) return@delete
-            handleDeleteScript(call, scriptsDir)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "scripts.delete", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                handleDeleteScript(call, scriptsDir)
+            }
         }
 
         get("/subtokens") {
-            val auth = requireAuth(call, security) ?: return@get
-            if (!requireRoot(call, auth)) return@get
-            call.respondText(subTokenListJson(security.subTokens.list()), contentType = ContentType.Application.Json)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "subtokens.list", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                call.respondText(subTokenListJson(security.subTokens.list()), contentType = ContentType.Application.Json)
+            }
         }
 
         get("/subtokens/{name}") {
-            val auth = requireAuth(call, security) ?: return@get
-            if (!requireRoot(call, auth)) return@get
-            handleSubTokenGet(call, security)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "subtokens.get", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                handleSubTokenGet(call, security)
+            }
         }
 
         post("/subtokens/{name}") {
-            val auth = requireAuth(call, security) ?: return@post
-            if (!requireRoot(call, auth)) return@post
-            handleSubTokenCreate(call, security)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "subtokens.create", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                handleSubTokenCreate(call, security)
+            }
         }
 
         put("/subtokens/{name}") {
-            val auth = requireAuth(call, security) ?: return@put
-            if (!requireRoot(call, auth)) return@put
-            handleSubTokenUpdate(call, security)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "subtokens.update", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                handleSubTokenUpdate(call, security)
+            }
         }
 
         delete("/subtokens/{name}") {
-            val auth = requireAuth(call, security) ?: return@delete
-            if (!requireRoot(call, auth)) return@delete
-            handleSubTokenDelete(call, security)
+            var authForLog: AuthContext? = null
+            withRequestAudit(call, "subtokens.delete", { authForLog }) {
+                val auth = requireAuth(call, security) ?: return@withRequestAudit
+                authForLog = auth
+                if (!requireRoot(call, auth)) return@withRequestAudit
+                handleSubTokenDelete(call, security)
+            }
         }
     }
 }
