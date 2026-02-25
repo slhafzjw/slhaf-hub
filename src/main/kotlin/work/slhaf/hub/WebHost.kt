@@ -3,11 +3,13 @@ package work.slhaf.hub
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.Routing
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -90,33 +92,118 @@ private suspend fun handleSubTokenDelete(call: io.ktor.server.application.Applic
     call.respondText("deleted subtoken: $name")
 }
 
+private suspend fun handleTypeForAuth(call: ApplicationCall, auth: AuthContext) {
+    call.respondText(tokenTypeJson(auth), contentType = ContentType.Application.Json)
+}
+
+private suspend fun handleScriptsForAuth(call: ApplicationCall, scriptsDir: File, auth: AuthContext) {
+    val allow = visibleScriptsFor(auth)
+    call.respondText(renderScriptList(scriptsDir, allow), ContentType.Text.Plain)
+}
+
+private suspend fun handleMetaForAuth(call: ApplicationCall, scriptsDir: File, auth: AuthContext) {
+    val name = call.parameters["script"]
+        ?: return call.respondText("missing route name", status = HttpStatusCode.BadRequest)
+    if (!requireScriptAccess(call, auth, name)) return
+
+    val script = resolveScriptFile(scriptsDir, name)
+        ?: return call.respondText("invalid script name", status = HttpStatusCode.BadRequest)
+    if (!script.exists()) {
+        return call.respondText("script not found: ${script.name}", status = HttpStatusCode.NotFound)
+    }
+
+    val (metadata, source) = loadMetadata(script)
+    call.respondText(
+        metadataJson(name, metadata, source),
+        contentType = ContentType.Application.Json,
+    )
+}
+
+private suspend fun handleRunForAuth(
+    call: ApplicationCall,
+    scriptsDir: File,
+    auth: AuthContext,
+    runConcurrencyLimiter: Semaphore,
+    consumeBody: Boolean,
+) {
+    val name = call.parameters["script"]
+        ?: return call.respondText("missing route name", status = HttpStatusCode.BadRequest)
+    if (!requireScriptAccess(call, auth, name)) return
+    runConcurrencyLimiter.withPermit {
+        handleRunRequest(call, scriptsDir, consumeBody = consumeBody)
+    }
+}
+
+private fun Routing.registerHeaderAuthenticatedRoutes(
+    scriptsDir: File,
+    security: HostSecurity,
+    runConcurrencyLimiter: Semaphore,
+) {
+    get("/type") {
+        val auth = requireAuth(call, security) ?: return@get
+        handleTypeForAuth(call, auth)
+    }
+
+    get("/scripts") {
+        val auth = requireAuth(call, security) ?: return@get
+        handleScriptsForAuth(call, scriptsDir, auth)
+    }
+
+    get("/meta/{script}") {
+        val auth = requireAuth(call, security) ?: return@get
+        handleMetaForAuth(call, scriptsDir, auth)
+    }
+
+    get("/run/{script}") {
+        val auth = requireAuth(call, security) ?: return@get
+        handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = false)
+    }
+
+    post("/run/{script}") {
+        val auth = requireAuth(call, security) ?: return@post
+        handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = true)
+    }
+}
+
+private fun Routing.registerSubTokenPathRoutes(
+    scriptsDir: File,
+    security: HostSecurity,
+    runConcurrencyLimiter: Semaphore,
+) {
+    get("/u/{subAuth}/type") {
+        val auth = requireSubTokenPathAuth(call, security) ?: return@get
+        handleTypeForAuth(call, auth)
+    }
+
+    get("/u/{subAuth}/scripts") {
+        val auth = requireSubTokenPathAuth(call, security) ?: return@get
+        handleScriptsForAuth(call, scriptsDir, auth)
+    }
+
+    get("/u/{subAuth}/meta/{script}") {
+        val auth = requireSubTokenPathAuth(call, security) ?: return@get
+        handleMetaForAuth(call, scriptsDir, auth)
+    }
+
+    get("/u/{subAuth}/run/{script}") {
+        val auth = requireSubTokenPathAuth(call, security) ?: return@get
+        handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = false)
+    }
+
+    post("/u/{subAuth}/run/{script}") {
+        val auth = requireSubTokenPathAuth(call, security) ?: return@post
+        handleRunForAuth(call, scriptsDir, auth, runConcurrencyLimiter, consumeBody = true)
+    }
+}
+
 fun Application.webModule(scriptsDir: File, security: HostSecurity, runConcurrencyLimiter: Semaphore) {
     routing {
         get("/health") {
             call.respondText("OK")
         }
 
-        get("/type") {
-            val auth = requireAuth(call, security) ?: return@get
-            call.respondText(tokenTypeJson(auth), contentType = ContentType.Application.Json)
-        }
-
-        get("/u/{subAuth}/type") {
-            val auth = requireSubTokenPathAuth(call, security) ?: return@get
-            call.respondText(tokenTypeJson(auth), contentType = ContentType.Application.Json)
-        }
-
-        get("/scripts") {
-            val auth = requireAuth(call, security) ?: return@get
-            val allow = visibleScriptsFor(auth)
-            call.respondText(renderScriptList(scriptsDir, allow), ContentType.Text.Plain)
-        }
-
-        get("/u/{subAuth}/scripts") {
-            val auth = requireSubTokenPathAuth(call, security) ?: return@get
-            val allow = visibleScriptsFor(auth)
-            call.respondText(renderScriptList(scriptsDir, allow), ContentType.Text.Plain)
-        }
+        registerHeaderAuthenticatedRoutes(scriptsDir, security, runConcurrencyLimiter)
+        registerSubTokenPathRoutes(scriptsDir, security, runConcurrencyLimiter)
 
         get("/scripts/{script}") {
             val auth = requireAuth(call, security) ?: return@get
@@ -140,86 +227,6 @@ fun Application.webModule(scriptsDir: File, security: HostSecurity, runConcurren
             val auth = requireAuth(call, security) ?: return@delete
             if (!requireRoot(call, auth)) return@delete
             handleDeleteScript(call, scriptsDir)
-        }
-
-        get("/meta/{script}") {
-            val auth = requireAuth(call, security) ?: return@get
-            val name = call.parameters["script"]
-                ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
-
-            if (!requireScriptAccess(call, auth, name)) return@get
-
-            val script = resolveScriptFile(scriptsDir, name)
-                ?: return@get call.respondText("invalid script name", status = HttpStatusCode.BadRequest)
-            if (!script.exists()) {
-                return@get call.respondText("script not found: ${script.name}", status = HttpStatusCode.NotFound)
-            }
-
-            val (metadata, source) = loadMetadata(script)
-            call.respondText(
-                metadataJson(name, metadata, source),
-                contentType = ContentType.Application.Json,
-            )
-        }
-
-        get("/u/{subAuth}/meta/{script}") {
-            val auth = requireSubTokenPathAuth(call, security) ?: return@get
-            val name = call.parameters["script"]
-                ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
-
-            if (!requireScriptAccess(call, auth, name)) return@get
-
-            val script = resolveScriptFile(scriptsDir, name)
-                ?: return@get call.respondText("invalid script name", status = HttpStatusCode.BadRequest)
-            if (!script.exists()) {
-                return@get call.respondText("script not found: ${script.name}", status = HttpStatusCode.NotFound)
-            }
-
-            val (metadata, source) = loadMetadata(script)
-            call.respondText(
-                metadataJson(name, metadata, source),
-                contentType = ContentType.Application.Json,
-            )
-        }
-
-        get("/run/{script}") {
-            val auth = requireAuth(call, security) ?: return@get
-            val name = call.parameters["script"]
-                ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
-            if (!requireScriptAccess(call, auth, name)) return@get
-            runConcurrencyLimiter.withPermit {
-                handleRunRequest(call, scriptsDir, consumeBody = false)
-            }
-        }
-
-        get("/u/{subAuth}/run/{script}") {
-            val auth = requireSubTokenPathAuth(call, security) ?: return@get
-            val name = call.parameters["script"]
-                ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
-            if (!requireScriptAccess(call, auth, name)) return@get
-            runConcurrencyLimiter.withPermit {
-                handleRunRequest(call, scriptsDir, consumeBody = false)
-            }
-        }
-
-        post("/run/{script}") {
-            val auth = requireAuth(call, security) ?: return@post
-            val name = call.parameters["script"]
-                ?: return@post call.respondText("missing route name", status = HttpStatusCode.BadRequest)
-            if (!requireScriptAccess(call, auth, name)) return@post
-            runConcurrencyLimiter.withPermit {
-                handleRunRequest(call, scriptsDir, consumeBody = true)
-            }
-        }
-
-        post("/u/{subAuth}/run/{script}") {
-            val auth = requireSubTokenPathAuth(call, security) ?: return@post
-            val name = call.parameters["script"]
-                ?: return@post call.respondText("missing route name", status = HttpStatusCode.BadRequest)
-            if (!requireScriptAccess(call, auth, name)) return@post
-            runConcurrencyLimiter.withPermit {
-                handleRunRequest(call, scriptsDir, consumeBody = true)
-            }
         }
 
         get("/subtokens") {
