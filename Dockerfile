@@ -14,10 +14,10 @@ RUN gradle --no-daemon clean installDist
 FROM ${RUNTIME_IMAGE}
 WORKDIR /app
 
-COPY --from=build /workspace/build/install/kotlin-scripts-host /app/kotlin-scripts-host
+COPY --from=build /workspace/build/install/slhaf-hub /app/slhaf-hub
 RUN mkdir -p /app/scripts
 
 EXPOSE 8080
 
-ENTRYPOINT ["/app/kotlin-scripts-host/bin/kotlin-scripts-host"]
+ENTRYPOINT ["/app/slhaf-hub/bin/slhaf-hub"]
 CMD ["--host=0.0.0.0", "--port=8080", "--scripts-dir=/app/scripts"]
