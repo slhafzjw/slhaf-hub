@@ -10,6 +10,7 @@ Language:
 - Dynamic script loading from `scripts/*.hub.kts` without restarting host
 - Root/Sub token authorization model
 - Metadata in script comments (`@desc`, `@timeout`, `@param`)
+- Compiled script cache (reuses compiled artifacts when script file is unchanged)
 - Script CRUD + run + metadata APIs
 - Subtoken management APIs
 - Run concurrency limit (`--max-run-concurrency`)

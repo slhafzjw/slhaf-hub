@@ -10,6 +10,7 @@
 - 从 `scripts/*.hub.kts` 动态加载脚本，无需重启 host
 - Root/Sub token 鉴权模型
 - 脚本注释 metadata（`@desc`、`@timeout`、`@param`）
+- 编译缓存（脚本文件未变化时复用已编译产物）
 - 脚本 CRUD + run + meta API
 - subtoken 管理 API
 - 运行并发限制（`--max-run-concurrency`）
