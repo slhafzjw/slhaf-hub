@@ -159,6 +159,30 @@ class WebHostApiTest {
 
         val listSubTokens = client.get("/subtokens") { bearer(token) }
         assertEquals(HttpStatusCode.Forbidden, listSubTokens.status)
+
+        val typeByPath = client.get("/u/demo-sub@$token/type")
+        assertEquals(HttpStatusCode.OK, typeByPath.status)
+        assertTrue(typeByPath.bodyAsText().contains("\"tokenType\":\"sub\""))
+
+        val scriptsByPath = client.get("/u/demo-sub@$token/scripts")
+        assertEquals(HttpStatusCode.OK, scriptsByPath.status)
+        assertTrue(scriptsByPath.bodyAsText().contains("allowed"))
+        assertFalse(scriptsByPath.bodyAsText().contains("blocked"))
+
+        val metaByPathAllowed = client.get("/u/demo-sub@$token/meta/allowed")
+        assertEquals(HttpStatusCode.OK, metaByPathAllowed.status)
+
+        val metaByPathBlocked = client.get("/u/demo-sub@$token/meta/blocked")
+        assertEquals(HttpStatusCode.Forbidden, metaByPathBlocked.status)
+
+        val runByPathAllowed = client.get("/u/demo-sub@$token/run/allowed")
+        assertEquals(HttpStatusCode.OK, runByPathAllowed.status)
+
+        val runByPathBlocked = client.get("/u/demo-sub@$token/run/blocked")
+        assertEquals(HttpStatusCode.Forbidden, runByPathBlocked.status)
+
+        val invalidPathAuth = client.get("/u/demo-sub@invalid-token/scripts")
+        assertEquals(HttpStatusCode.Unauthorized, invalidPathAuth.status)
     }
 
     @Test

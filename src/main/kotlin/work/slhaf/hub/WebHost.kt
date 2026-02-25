@@ -101,8 +101,19 @@ fun Application.webModule(scriptsDir: File, security: HostSecurity, runConcurren
             call.respondText(tokenTypeJson(auth), contentType = ContentType.Application.Json)
         }
 
+        get("/u/{subAuth}/type") {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@get
+            call.respondText(tokenTypeJson(auth), contentType = ContentType.Application.Json)
+        }
+
         get("/scripts") {
             val auth = requireAuth(call, security) ?: return@get
+            val allow = visibleScriptsFor(auth)
+            call.respondText(renderScriptList(scriptsDir, allow), ContentType.Text.Plain)
+        }
+
+        get("/u/{subAuth}/scripts") {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@get
             val allow = visibleScriptsFor(auth)
             call.respondText(renderScriptList(scriptsDir, allow), ContentType.Text.Plain)
         }
@@ -151,6 +162,26 @@ fun Application.webModule(scriptsDir: File, security: HostSecurity, runConcurren
             )
         }
 
+        get("/u/{subAuth}/meta/{script}") {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@get
+            val name = call.parameters["script"]
+                ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
+
+            if (!requireScriptAccess(call, auth, name)) return@get
+
+            val script = resolveScriptFile(scriptsDir, name)
+                ?: return@get call.respondText("invalid script name", status = HttpStatusCode.BadRequest)
+            if (!script.exists()) {
+                return@get call.respondText("script not found: ${script.name}", status = HttpStatusCode.NotFound)
+            }
+
+            val (metadata, source) = loadMetadata(script)
+            call.respondText(
+                metadataJson(name, metadata, source),
+                contentType = ContentType.Application.Json,
+            )
+        }
+
         get("/run/{script}") {
             val auth = requireAuth(call, security) ?: return@get
             val name = call.parameters["script"]
@@ -161,8 +192,28 @@ fun Application.webModule(scriptsDir: File, security: HostSecurity, runConcurren
             }
         }
 
+        get("/u/{subAuth}/run/{script}") {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@get
+            val name = call.parameters["script"]
+                ?: return@get call.respondText("missing route name", status = HttpStatusCode.BadRequest)
+            if (!requireScriptAccess(call, auth, name)) return@get
+            runConcurrencyLimiter.withPermit {
+                handleRunRequest(call, scriptsDir, consumeBody = false)
+            }
+        }
+
         post("/run/{script}") {
             val auth = requireAuth(call, security) ?: return@post
+            val name = call.parameters["script"]
+                ?: return@post call.respondText("missing route name", status = HttpStatusCode.BadRequest)
+            if (!requireScriptAccess(call, auth, name)) return@post
+            runConcurrencyLimiter.withPermit {
+                handleRunRequest(call, scriptsDir, consumeBody = true)
+            }
+        }
+
+        post("/u/{subAuth}/run/{script}") {
+            val auth = requireSubTokenPathAuth(call, security) ?: return@post
             val name = call.parameters["script"]
                 ?: return@post call.respondText("missing route name", status = HttpStatusCode.BadRequest)
             if (!requireScriptAccess(call, auth, name)) return@post
@@ -211,17 +262,22 @@ Usage:
 Routes:
   GET  /health
   GET  /type
+  GET  /u/{subtoken_name}@{subtoken}/type      (subtoken path auth)
   Authorization:
     Authorization: Bearer <token>
     or X-Host-Token: <token>
   GET  /scripts
+  GET  /u/{subtoken_name}@{subtoken}/scripts   (subtoken path auth)
   GET  /scripts/{script}                      (root only)
   POST /scripts/{script}                      (root only)
   PUT  /scripts/{script}                      (root only)
   DELETE /scripts/{script}                    (root only)
   GET  /meta/{script}                         (root or allowed subtoken)
+  GET  /u/{subtoken_name}@{subtoken}/meta/{script}
   GET  /run/{script}?k=v                      (root or allowed subtoken)
+  GET  /u/{subtoken_name}@{subtoken}/run/{script}?k=v
   POST /run/{script}?k=v                      (root or allowed subtoken)
+  POST /u/{subtoken_name}@{subtoken}/run/{script}?k=v
   GET  /subtokens                             (root only)
   GET  /subtokens/{name}                      (root only)
   POST /subtokens/{name}                      (root only, body: script names list)

@@ -62,6 +62,13 @@ class SubTokenStore(
             byName.values.firstOrNull { it.token == token }
         }
 
+    fun findByNameAndToken(name: String, token: String): SubTokenRecord? =
+        synchronized(lock) {
+            ensureLoaded()
+            val record = byName[name] ?: return null
+            if (record.token == token) record else null
+        }
+
     fun create(name: String, scripts: Set<String>): SubTokenRecord {
         synchronized(lock) {
             ensureLoaded()
@@ -198,12 +205,44 @@ private fun authenticateToken(call: ApplicationCall, security: HostSecurity): Au
     return AuthContext(type = TokenType.SUB, subTokenName = sub.name, allowedScripts = sub.scripts)
 }
 
+private fun parseSubTokenPathCredential(raw: String?): Pair<String, String>? {
+    val value = raw?.trim().orEmpty()
+    if (value.isBlank()) return null
+    val at = value.indexOf('@')
+    if (at <= 0 || at == value.lastIndex) return null
+    val name = value.substring(0, at).trim()
+    val token = value.substring(at + 1).trim()
+    if (!name.matches(SCRIPT_NAME_REGEX) || token.isBlank()) return null
+    return name to token
+}
+
+fun authenticateSubTokenPath(pathCredential: String?, security: HostSecurity): AuthContext? {
+    val (name, token) = parseSubTokenPathCredential(pathCredential) ?: return null
+    val sub = security.subTokens.findByNameAndToken(name, token) ?: return null
+    return AuthContext(type = TokenType.SUB, subTokenName = sub.name, allowedScripts = sub.scripts)
+}
+
 suspend fun requireAuth(call: ApplicationCall, security: HostSecurity): AuthContext? {
     val context = authenticateToken(call, security)
     if (context != null) return context
 
     call.response.headers.append(HttpHeaders.WWWAuthenticate, "Bearer realm=\"script-host\"")
     call.respondText("unauthorized", status = HttpStatusCode.Unauthorized, contentType = ContentType.Text.Plain)
+    return null
+}
+
+suspend fun requireSubTokenPathAuth(
+    call: ApplicationCall,
+    security: HostSecurity,
+    pathParamName: String = "subAuth",
+): AuthContext? {
+    val context = authenticateSubTokenPath(call.parameters[pathParamName], security)
+    if (context != null) return context
+    call.respondText(
+        "unauthorized subtoken path, expected /u/<subtoken_name>@<subtoken>/...",
+        status = HttpStatusCode.Unauthorized,
+        contentType = ContentType.Text.Plain,
+    )
     return null
 }
 
