@@ -263,6 +263,34 @@ class WebHostApiTest {
         assertTrue(runtimeErrorBody.contains("boom (required=false"))
     }
 
+    @Test
+    fun defaultParamValueIsInjectedIntoHostArgs() = withApp { _ ->
+        val create = client.post("/scripts/defaults") {
+            bearerRoot()
+            setBody(
+                """
+                // @desc: default args test
+                // @param: name | required=false | default=world | desc=Name fallback
+                val args: Array<String> = emptyArray()
+                val kv = args.mapNotNull {
+                    val i = it.indexOf('=')
+                    if (i <= 0) null else it.substring(0, i) to it.substring(i + 1)
+                }.toMap()
+                println("name=" + (kv["name"] ?: "missing"))
+                """.trimIndent()
+            )
+        }
+        assertEquals(HttpStatusCode.Created, create.status)
+
+        val runWithoutArg = client.get("/run/defaults") { bearerRoot() }
+        assertEquals(HttpStatusCode.OK, runWithoutArg.status)
+        assertTrue(runWithoutArg.bodyAsText().contains("name=world"))
+
+        val runWithArg = client.get("/run/defaults?name=alice") { bearerRoot() }
+        assertEquals(HttpStatusCode.OK, runWithArg.status)
+        assertTrue(runWithArg.bodyAsText().contains("name=alice"))
+    }
+
     private fun withApp(testBlock: suspend io.ktor.server.testing.ApplicationTestBuilder.(java.nio.file.Path) -> Unit) {
         val scriptsDir = createTempDirectory("webhost-api-test-")
         tempDirs.add(scriptsDir)

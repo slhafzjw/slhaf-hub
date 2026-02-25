@@ -1,7 +1,7 @@
 // @desc: hello
 // @timeout: 10s
 // @param: name   | default=world | desc=hello <name> | required=false
-// @param: upper  | default=false | desc=upper text   | required=true
+// @param: upper  | default=true | desc=upper text   | required=false
 import java.time.LocalDateTime
 
 val args: Array<String> = emptyArray()
@@ -13,7 +13,7 @@ val kv =
         }.toMap()
 
 val name = kv["name"] ?: "world"
-val upper = (kv["upper"]!!).toBoolean()
+val upper = (kv["upper"] ?: "false").toBoolean()
 val message = "Hello, $name @ ${LocalDateTime.now()}"
 
 println(if (upper) message.uppercase() else message)

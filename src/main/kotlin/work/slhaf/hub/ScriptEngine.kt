@@ -20,6 +20,7 @@ import kotlin.script.experimental.jvmhost.BasicJvmScriptingHost
 private val scriptingHost = BasicJvmScriptingHost()
 private val evalLock = Any()
 private val metadataCache = ConcurrentHashMap<String, Pair<String, ScriptMetadata>>() // key -> stamp, metadata
+private val compiledScriptCache = ConcurrentHashMap<String, Pair<String, CompiledScript>>() // key -> stamp, compiled script
 
 private val resolver = CompoundDependenciesResolver(FileSystemDependenciesResolver(), MavenDependenciesResolver())
 private val argsDeclarationRegex = Regex("""^\s*val\s+args\s*:\s*Array<String>\s*=\s*emptyArray\(\)\s*$""")
@@ -81,27 +82,11 @@ private fun compilationConfiguration(explicitCp: List<File>?): ScriptCompilation
     }
 }
 
-private fun escapeKotlinString(value: String): String = buildString(value.length) {
-    value.forEach { ch ->
-        when (ch) {
-            '\\' -> append("\\\\")
-            '"' -> append("\\\"")
-            '\n' -> append("\\n")
-            '\r' -> append("\\r")
-            '\t' -> append("\\t")
-            else -> append(ch)
-        }
-    }
-}
-
-private fun argsInitializer(args: List<String>): String =
-    "val args: Array<String> = arrayOf(${args.joinToString(",") { "\"${escapeKotlinString(it)}\"" }})"
-
 private fun scriptStamp(file: File): String = "${file.length()}-${file.lastModified()}"
 
-private fun injectArgsDeclaration(scriptContent: String, args: List<String>): String {
+private fun injectArgsBridgeDeclaration(scriptContent: String): String {
     val lines = scriptContent.lines()
-    val injected = argsInitializer(args)
+    val injected = "val args: Array<String> = hostArgs"
     var replaced = false
     val result = lines.map { line ->
         if (!replaced && argsDeclarationRegex.matches(line)) {
@@ -112,6 +97,24 @@ private fun injectArgsDeclaration(scriptContent: String, args: List<String>): St
         }
     }
     return result.joinToString("\n")
+}
+
+private fun parseArgEntry(raw: String): Pair<String, String>? {
+    val idx = raw.indexOf('=')
+    if (idx <= 0) return null
+    return raw.substring(0, idx) to raw.substring(idx + 1)
+}
+
+private fun applyDefaultArgs(metadata: ScriptMetadata, requestArgs: List<String>): List<String> {
+    val existingKeys = requestArgs.mapNotNull { parseArgEntry(it)?.first }.toMutableSet()
+    val merged = requestArgs.toMutableList()
+    metadata.params.forEach { param ->
+        if (!existingKeys.contains(param.name) && param.defaultValue != null) {
+            merged += "${param.name}=${param.defaultValue}"
+            existingKeys += param.name
+        }
+    }
+    return merged
 }
 
 private fun parseMetadataFromComments(scriptContent: String): ScriptMetadata {
@@ -259,9 +262,35 @@ private fun metadataForFile(scriptFile: File, scriptContent: String): ScriptMeta
     return parsed
 }
 
-private fun evalSource(source: SourceCode): ResultWithDiagnostics<EvaluationResult> {
+private fun compileSource(source: SourceCode): ResultWithDiagnostics<CompiledScript> {
     val explicitCp = explicitClasspathFromEnv()
-    return scriptingHost.eval(source, compilationConfiguration(explicitCp), null)
+    return runBlocking {
+        scriptingHost.compiler(source, compilationConfiguration(explicitCp))
+    }
+}
+
+private fun evalCompiled(compiledScript: CompiledScript, requestContext: ScriptRequestContext): ResultWithDiagnostics<EvaluationResult> {
+    val evaluationConfiguration = ScriptEvaluationConfiguration {
+        constructorArgs(requestContext.args.toTypedArray())
+    }
+    return runBlocking {
+        scriptingHost.evaluator(compiledScript, evaluationConfiguration)
+    }
+}
+
+private fun compiledScriptFor(scriptFile: File, preparedContent: String): ResultWithDiagnostics<CompiledScript> {
+    val key = scriptFile.canonicalPath
+    val stamp = scriptStamp(scriptFile)
+    val cached = compiledScriptCache[key]
+    if (cached != null && cached.first == stamp) {
+        return cached.second.asSuccess()
+    }
+
+    val compiled = compileSource(preparedContent.toScriptSource(scriptFile.name))
+    if (compiled is ResultWithDiagnostics.Success) {
+        compiledScriptCache[key] = stamp to compiled.value
+    }
+    return compiled
 }
 
 data class ScriptExecutionResult(
@@ -281,6 +310,7 @@ fun cachedMetadata(scriptFile: File): ScriptMetadata? {
 
 fun removeCachedMetadata(scriptFile: File) {
     metadataCache.remove(scriptFile.canonicalPath)
+    compiledScriptCache.remove(scriptFile.canonicalPath)
 }
 
 fun loadMetadataFromComments(scriptFile: File): ScriptMetadata {
@@ -316,16 +346,23 @@ fun evalAndCapture(
                     }
                 }
                 .map { it.name }
+            val effectiveArgs = applyDefaultArgs(metadata, requestContext.args)
 
-            val injected = injectArgsDeclaration(original, requestContext.args)
-            val result = evalSource(injected.toScriptSource(scriptFile.name))
-            val returnValueError = (result as? ResultWithDiagnostics.Success)
+            val injected = injectArgsBridgeDeclaration(original)
+            val compilationResult = compiledScriptFor(scriptFile, injected)
+            val evaluationResult = if (compilationResult is ResultWithDiagnostics.Success) {
+                evalCompiled(compilationResult.value, requestContext.copy(args = effectiveArgs))
+            } else {
+                null
+            }
+            val reports = evaluationResult?.reports ?: compilationResult.reports
+            val returnValueError = (evaluationResult as? ResultWithDiagnostics.Success)
                 ?.value
                 ?.returnValue as? ResultValue.Error
-            val hasErrorDiagnostics = result.reports.any {
+            val hasErrorDiagnostics = reports.any {
                 it.severity == ScriptDiagnostic.Severity.ERROR || it.severity == ScriptDiagnostic.Severity.FATAL
             }
-            val diagnostics = result.reports
+            val diagnostics = reports
                 .filter { it.severity > ScriptDiagnostic.Severity.DEBUG }
                 .joinToString("\n") {
                     val ex = it.exception?.let { e -> ": ${e::class.simpleName}: ${e.message}" } ?: ""
@@ -343,7 +380,8 @@ fun evalAndCapture(
             }.trim()
 
             ScriptExecutionResult(
-                ok = result is ResultWithDiagnostics.Success &&
+                ok = compilationResult is ResultWithDiagnostics.Success &&
+                    evaluationResult is ResultWithDiagnostics.Success &&
                     !hasErrorDiagnostics &&
                     returnValueError == null &&
                     (!enforceRequiredParams || missingRequired.isEmpty()),
